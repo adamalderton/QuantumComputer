@@ -57,6 +57,11 @@
         return error; \
     }
 
+#define ERROR_CHECk_GSL(error) \
+    if (error != GSL_SUCCESS) { \
+        return error; \
+    }
+
 /* Checks for the success of the opening of a file. */
 #define FILE_CHECK(file, filename) \
     if (file == NULL) { \
@@ -97,17 +102,20 @@ typedef enum {
 
 /* Global Variables */
 
-// const double HADAMARD_2x2[2][2] = {
-//     {(1.0/M_SQRT2) * 1.0, (1.0/M_SQRT2) * 1.0},
-//     {(1.0/M_SQRT2) * 1.0, (1.0/M_SQRT2) * -1.0}
-// };
-
-const int HADAMARD_2x2[2][2] = {
-    {1, 1},
-    {1, -1}
+const double HADAMARD_2x2[2][2] = {
+    {(1.0/M_SQRT2) * 1.0, (1.0/M_SQRT2) * 1.0},
+    {(1.0/M_SQRT2) * 1.0, (1.0/M_SQRT2) * -1.0}
 };
 
-int num_qubits = 3;
+/* TODO: EXPLAIN WHY IT IS DOUBLE TYPE. */
+const double CNOT_4x4[4][4] = {
+    {1.0, 0.0, 0.0, 0.0},
+    {0.0, 1.0, 0.0, 0.0},
+    {0.0, 0.0, 0.0, 1.0},
+    {0.0, 0.0, 1.0, 0.0}
+};
+
+int num_qubits;
 
 
 /***********************************FUNCTION PROTOTYPES**********************************/
@@ -115,20 +123,20 @@ int num_qubits = 3;
 
 /****************************************************************************************/
 
-static ErrorCode build_hadamard_matrix(gsl_spmatrix_complex *hadamard, int qubit_num)
+static void build_hadamard_matrix(gsl_spmatrix **hadamard, int qubit_num)
 {
-    unsigned char not_xor_ij;
-    gsl_complex element;
+    int not_xor_ij;
+    int nth_address;
+    bool dirac_deltas_non_zero;
+    gsl_spmatrix *temp_hadamard_coo;
     
-    /* Needed as binary numbers will be addressed right to left. */
-    int nth_address = (num_qubits - 1) - qubit_num;
+    nth_address = (num_qubits - 1) - qubit_num;
 
-    bool element_non_zero;
-    int spmatrix_operation_success;
+    temp_hadamard_coo = gsl_spmatrix_alloc(8, 8);
 
     for (int i = 0; i < 8; i++) {
         for (int j = 0; j < 8; j++) {
-            element_non_zero = true;
+            dirac_deltas_non_zero = true;
             
             /* 
              * Bitwise EXCLUSIVE OR of integers i and j, followed by a
@@ -139,7 +147,7 @@ static ErrorCode build_hadamard_matrix(gsl_spmatrix_complex *hadamard, int qubit
             not_xor_ij = ~(i ^ j);
 
             /* Loop over bits in not_xor_ij. */
-            for (int b = 0; b < 8; b++) {
+            for (int b = 0; b < 2*2*2; b++) {
     
                 /* 
                  * If at least one bit in not_xor_ij is 0, the (i,j)'th element in the matrix will be 0.
@@ -148,73 +156,184 @@ static ErrorCode build_hadamard_matrix(gsl_spmatrix_complex *hadamard, int qubit
 
                 if (b != nth_address) {
                     if (GET_BIT(not_xor_ij, b) == 0) {
-                        element_non_zero = false;
+                        dirac_deltas_non_zero = false;
                         break;
                     }
                 }
             }
 
-            if (element_non_zero) {
+            if (dirac_deltas_non_zero) {
 
                 /* 
                  * If all the Kronecker deltas in this term are 1, what's left is to actually find the 
-                 * H value. To do this, extract the qubit_num'th digits in the binary representations
+                 * H value. To do this, extract the nth_address'th digits in the binary representations
                  * of i and j. These values, each 0 or 1, are the indices of the value to extract from
                  * the 2x2 Hadamard materix, HADAMARD_2x2.
                  */
-                int hi = GET_BIT(i, nth_address);
-                int hj = GET_BIT(j, nth_address);
 
-
-                GSL_SET_REAL(&element, HADAMARD_2x2[hi][hj]);
-                GSL_SET_IMAG(&element, 0);
-
-                spmatrix_operation_success = gsl_spmatrix_complex_set(hadamard, i, j, element);
-                if (spmatrix_operation_success != GSL_SUCCESS) {
-                    return GSL_ERROR;
-                }
-
+                gsl_spmatrix_set(temp_hadamard_coo, i, j, HADAMARD_2x2[GET_BIT(i, nth_address)][GET_BIT(j, nth_address)]);
             }
         }
     }
 
-    /* Convert matrix to CSC format for efficient calculations in future. */
-    // spmatrix_operation_success = gsl_spmatrix_complex_csc(hadamard, temp_hadamard_coo);
-    // if (spmatrix_operation_success != GSL_SUCCESS) {
-    //     return GSL_ERROR;
-    // }
+    *hadamard = gsl_spmatrix_compress(temp_hadamard_coo, GSL_SPMATRIX_CSC);
 
-    return NO_ERROR;
+    gsl_spmatrix_free(temp_hadamard_coo);
+
 }
 
-static ErrorCode temp(int n)
+static void hadamard_gate(gsl_vector_complex *state, int qubit_num)
 {
-    ErrorCode error;
-    gsl_vector_complex *state;
-    gsl_spmatrix_complex *hadamard;
+    gsl_spmatrix *hadamard;
+    gsl_vector_complex *new_state;
+    gsl_vector_view new_state_real;
+    gsl_vector_view new_state_imag;
+    gsl_vector_view state_real;
+    gsl_vector_view state_imag;
 
-    /* Initialises hadamard (sparse) matrix and sets all elements to 0. */
-    hadamard = gsl_spmatrix_complex_alloc(8, 8);
+    hadamard = gsl_spmatrix_alloc(8, 8);
 
-    state = gsl_vector_complex_alloc(8);
+    build_hadamard_matrix(&hadamard, qubit_num);
 
-    gsl_complex element = gsl_complex_rect( (1.0/sqrt(8.0)), 0.0 );
+    new_state = gsl_vector_complex_calloc(8);
 
-    for (int i = 0; i < 8; i++) {
-        gsl_vector_complex_set(state, i, element);
-    }
+    new_state_real = gsl_vector_complex_real(new_state);
+    new_state_imag = gsl_vector_complex_imag(new_state);
+    state_real = gsl_vector_complex_real(state);
+    state_imag = gsl_vector_complex_imag(state);
 
-    error = build_hadamard_matrix(hadamard, n); // 1 is second qubit
-    ERROR_CHECK(error);
+    gsl_spblas_dgemv(CblasNoTrans, 1.0, hadamard, &state_real.vector, 0.0, &new_state_real.vector);
+    gsl_spblas_dgemv(CblasNoTrans, 1.0, hadamard, &state_imag.vector, 0.0, &new_state_imag.vector);
+
+    /* 
+     * Copy new_state into state.
+     * This could be more elegantly achieved with pointer manipulation
+     * but there are logistical issues with GSL's internal tracking of vectors.
+     * Additionally, the state vectors are small so the vector copying functions
+     * are not too laborious to contrast the benefits of readability.
+     */
+    gsl_vector_complex_memcpy(state, new_state);
+
+    gsl_spmatrix_free(hadamard);
+    gsl_vector_complex_free(new_state);
+}
+
+static void build_cnot_matrix(gsl_spmatrix **cnot, int c_qubit_num, int qubit_num)
+{
+    int not_xor_ij;
+    int element;
+    bool dirac_deltas_non_zero;
+    gsl_spmatrix *temp_cnot_coo;
+
+    int c_q_address = (num_qubits - 1) - c_qubit_num;
+    int q_address = (num_qubits - 1) - qubit_num;
+
+    temp_cnot_coo = gsl_spmatrix_alloc(8, 8);
 
     for (int i = 0; i < 8; i++) {
         for (int j = 0; j < 8; j++) {
-            printf("%d  ", (int) (GSL_REAL(gsl_spmatrix_complex_get(hadamard, i, j))));
+            dirac_deltas_non_zero = true;
+
+            not_xor_ij = ~(i ^ j);
+
+            for (int b = 0; b < 2*2*2; b++) {
+
+                if ( (b != q_address) && (b != c_q_address) ) {
+                    if (GET_BIT(not_xor_ij, b) == 0) {
+                        dirac_deltas_non_zero = false;
+                        break;
+                    }
+                }
+            }
+
+            if (dirac_deltas_non_zero) {
+
+                element = CNOT_4x4
+                [(2*GET_BIT(i, c_q_address)) + GET_BIT(i, q_address)]
+                [(2*GET_BIT(j, c_q_address)) + GET_BIT(j, q_address)];
+
+                gsl_spmatrix_set(temp_cnot_coo, i, j, element);
+            }
+
         }
-        printf("\n");
     }
 
-    gsl_spmatrix_complex_free(hadamard);
+    *cnot = gsl_spmatrix_compress(temp_cnot_coo, GSL_SPMATRIX_CSC);
+
+    gsl_spmatrix_free(temp_cnot_coo);
+}
+
+static void cnot_gate(gsl_vector_complex *state, int c_qubit_num, int qubit_num)
+{
+    /*
+     * The cnot matrix is to be less efficiently stored as a matrix of doubles,
+     * even though its elements will be integers. This is as such to agree with the
+     * sparse matrix-vector multiplication methods supplied by GSL. Fortunately,
+     * due to the nature of sparse matrices, the memory consumption of the matrix 
+     * will remain reasonably low.
+     */
+    gsl_spmatrix *cnot;
+
+    gsl_vector_complex *new_state;
+    gsl_vector_view new_state_real;
+    gsl_vector_view new_state_imag;
+    gsl_vector_view state_real;
+    gsl_vector_view state_imag;
+
+    cnot = gsl_spmatrix_alloc(8, 8);
+
+    build_cnot_matrix(&cnot, c_qubit_num, qubit_num);
+
+    new_state = gsl_vector_complex_calloc(8);
+
+    new_state_real = gsl_vector_complex_real(new_state);
+    new_state_imag = gsl_vector_complex_imag(new_state);
+    state_real = gsl_vector_complex_real(state);
+    state_imag = gsl_vector_complex_imag(state);
+
+    gsl_spblas_dgemv(CblasNoTrans, 1.0, cnot, &state_real.vector, 0.0, &new_state_real.vector);
+    gsl_spblas_dgemv(CblasNoTrans, 1.0, cnot, &state_imag.vector, 0.0, &new_state_imag.vector);
+
+    /* 
+     * Copy new_state into state.
+     * This could be more elegantly achieved with pointer manipulation
+     * but there are logistical issues with GSL's internal tracking of vectors.
+     * Additionally, the state vectors are small so the vector copying functions
+     * are not too laborious to contrast the benefits of readability.
+     */
+    gsl_vector_complex_memcpy(state, new_state);
+
+    gsl_spmatrix_free(cnot);
+    gsl_vector_complex_free(new_state);
+}
+
+void display_state(gsl_vector_complex *state)
+{
+    for (int i = 0; i < 8; i++) {
+        printf("|%d%d%d> ", GET_BIT(i, 2), GET_BIT(i, 1), GET_BIT(i, 0));
+
+        printf("%g\n", gsl_complex_abs(gsl_vector_complex_get(state, i)));
+    }
+
+}
+
+ErrorCode temp()
+{
+    gsl_vector_complex *state;
+
+    state = gsl_vector_complex_alloc(8);
+
+    gsl_vector_complex_set(state, 0, gsl_complex_rect(1.0, 0.0));
+    for (int i = 1; i < 8; i++) {
+        gsl_vector_complex_set(state, i, gsl_complex_rect(0.0, 0.0));
+    }
+
+    hadamard_gate(state, 1);
+    cnot_gate(state, 1, 2);
+    hadamard_gate(state, 1);
+
+    display_state(state);
+
     gsl_vector_complex_free(state);
 
     return NO_ERROR;
@@ -240,9 +359,10 @@ int main(int argc, char *argv[])
      * Ideally, if possible, would be good to have in-place computation.
      */
 
-    int n = atoi(argv[1]);
 
-    temp(n);
+    num_qubits = atoi(argv[1]);
+
+    temp();
 
 
 
