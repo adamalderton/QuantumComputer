@@ -45,6 +45,8 @@
 #define LINE_BUFFER_LENGTH 1024     /* Large buffer to read in lines of files. */
 #define MAX_FILENAME_LENGTH 128
 
+#define LOW_POWER_TOLERANCE 5
+
 /* 
  * Many functions below return an errorcode. This macro is called after these functions return
  * and checks for an error. If so, this ends the function in which the error
@@ -57,10 +59,6 @@
         return error; \
     }
 
-#define ERROR_CHECk_GSL(error) \
-    if (error != GSL_SUCCESS) { \
-        return error; \
-    }
 
 /* Checks for the success of the opening of a file. */
 #define FILE_CHECK(file, filename) \
@@ -87,6 +85,9 @@
  */
 #define GET_BIT(int, n) \
     ( (int & (1<<n)) >> n )
+
+#define INT_POW(base, power) \
+    ( (int) (pow(base, power) + 0.5) ) 
 
 /***********************************TYPEDEFS AND GLOBALS*********************************/
 
@@ -307,7 +308,17 @@ static void cnot_gate(gsl_vector_complex *state, int c_qubit_num, int qubit_num)
     gsl_vector_complex_free(new_state);
 }
 
-void display_state(gsl_vector_complex *state)
+static void phase_change_gate(gsl_vector_complex *state, double theta)
+{
+    gsl_complex temp;
+
+    for (int i = 0; i < 8; i+=2) {
+        temp = gsl_vector_complex_get(state, i);
+        gsl_vector_complex_set(state, i, gsl_complex_mul(temp, gsl_complex_polar(1.0, theta)));
+    }
+}
+
+static void display_state(gsl_vector_complex *state)
 {
     for (int i = 0; i < 8; i++) {
         printf("|%d%d%d> ", GET_BIT(i, 2), GET_BIT(i, 1), GET_BIT(i, 0));
@@ -317,28 +328,87 @@ void display_state(gsl_vector_complex *state)
 
 }
 
-ErrorCode temp()
+static int greatest_common_divisor(int a, int b)
 {
-    gsl_vector_complex *state;
+    int temp;
 
-    state = gsl_vector_complex_alloc(8);
-
-    gsl_vector_complex_set(state, 0, gsl_complex_rect(1.0, 0.0));
-    for (int i = 1; i < 8; i++) {
-        gsl_vector_complex_set(state, i, gsl_complex_rect(0.0, 0.0));
+    /* Trivial cases. */
+    if (a == 0) {
+        return b;
+    }
+    if (b == 0) {
+        return a;
+    }
+    if (a == b) {
+        return a;
     }
 
-    hadamard_gate(state, 1);
-    cnot_gate(state, 1, 2);
-    hadamard_gate(state, 1);
+    /* Simple iterative version of Euclid algorithm. */
+    while ((a % b) > 0) {
+        temp = a % b;
+        a = b;
+        b = temp;
+    }
 
-    display_state(state);
+    return b;
+}
+
+static bool is_power(int small_integer, int C)
+{
+    // TODO: THIS
+    return false;
+}
+
+static int find_p(int a, int C)
+{
+
+    return 4;
+}
+
+static ErrorCode shors_algorithm(int *factors, int C, int L, int M)
+{
+    for (int i = 2; i < LOW_POWER_TOLERANCE; i++) {
+        if (is_power(i, C)) {
+            factors[0] = i;
+            factors[1] = C / i;
+            return NO_ERROR;
+        }
+    }
+
+    gsl_vector_complex *state;
+    state = gsl_vector_complex_alloc(INT_POW(2, num_qubits));
+
+    for (int a = 2; a < C; a++) {
+        int p;
+        int gcd = greatest_common_divisor(a, C);
+
+        if (gcd > 1) {
+            factors[0] = gcd;
+            factors[1] = C / gcd;
+
+            gsl_vector_complex_free(state);
+            
+            return NO_ERROR;
+        }
+
+        p = find_p(a, C);
+
+        if ( (p % 2 == 0) &&
+           ( (INT_POW(a, p/2) + 1) % C == 0 ) ) {
+            continue;
+        } else {
+            continue;
+        }
+
+        factors[0] = greatest_common_divisor(INT_POW(a, p/2) + 1, C);
+        factors[1] = greatest_common_divisor(INT_POW(a, p/2) - 1, C);
+
+    }
 
     gsl_vector_complex_free(state);
 
     return NO_ERROR;
 }
-
 
 /****************************************************************************************
  * main -- Parse command line arguments and execute N body simulation.                  *
@@ -350,21 +420,27 @@ ErrorCode temp()
  ****************************************************************************************/
 int main(int argc, char *argv[])
 {
-    /* #states = 2^(#qubits) */
+/*
+TODO:
+    - One (two) matrix, similar to state, at to prevent many mallocs and frees.
+    - Use clever pointer stuff to swap state and new state.
+    - (potentially) normalise as you go.
+    - Verbose option
+    - ALL comments.
+    - Find reference for gcd algorithm.
+    - Put checks on gcd algorithm?
+*/
+    ErrorCode error;
+    int factors[2];
 
-    /*
-     * For writing own complex sparse matrix multiplication:
-     * https://github.com/ampl/gsl/blob/master/spblas/spdgemv.c
-     * 
-     * Ideally, if possible, would be good to have in-place computation.
-     */
+    // parse_command_line_args(argc, char *argv[]);
+    
+    num_qubits = 3;
 
+    error = shors_algorithm(factors, 15, 3, 4);
+    ERROR_CHECK(error);
 
-    num_qubits = atoi(argv[1]);
-
-    temp();
-
-
+    fprintf(stdout, "Factors: (%d, %d)\n", factors[0], factors[1]);
 
     return NO_ERROR;
 }
