@@ -102,11 +102,12 @@ typedef enum {
 } ErrorCode;
 
 typedef struct {
-    gsl_vector_complex **current;
-    gsl_vector_complex **new;
+    gsl_vector_complex **current_state;
+    gsl_vector_complex **new_state;
     gsl_vector_complex *state_a;
     gsl_vector_complex *state_b;
-    gsl_spmatrix *matrix;
+    gsl_spmatrix *result_matrix;
+    gsl_spmatrix *comp_matrix;
 } States;
 
 /* Global Variables */
@@ -125,23 +126,25 @@ const double CNOT_4x4[4][4] = {
 };
 
 int num_qubits;
+int num_states;
 
 
 /***********************************FUNCTION PROTOTYPES**********************************/
-
+static void swap_states(States *states);
+static void display_state(gsl_vector_complex *state);
 
 /****************************************************************************************/
 
-static void build_hadamard_matrix(gsl_spmatrix **hadamard, int qubit_num)
+static void build_hadamard_matrix(States *states, int qubit_num)
 {
     int not_xor_ij;
     int nth_address;
     bool dirac_deltas_non_zero;
-    gsl_spmatrix *temp_hadamard_coo;
-    
+
     nth_address = (num_qubits - 1) - qubit_num;
 
-    temp_hadamard_coo = gsl_spmatrix_alloc(8, 8);
+    /* Set all element in comp_matrix to 0. */
+    gsl_spmatrix_set_zero(states->comp_matrix);
 
     for (int i = 0; i < 8; i++) {
         for (int j = 0; j < 8; j++) {
@@ -180,64 +183,45 @@ static void build_hadamard_matrix(gsl_spmatrix **hadamard, int qubit_num)
                  * the 2x2 Hadamard materix, HADAMARD_2x2.
                  */
 
-                gsl_spmatrix_set(temp_hadamard_coo, i, j, HADAMARD_2x2[GET_BIT(i, nth_address)][GET_BIT(j, nth_address)]);
+                gsl_spmatrix_set(states->comp_matrix, i, j, HADAMARD_2x2[GET_BIT(i, nth_address)][GET_BIT(j, nth_address)]);
             }
         }
     }
 
-    *hadamard = gsl_spmatrix_compress(temp_hadamard_coo, GSL_SPMATRIX_CSC);
-
-    gsl_spmatrix_free(temp_hadamard_coo);
-
+    states->result_matrix = gsl_spmatrix_compress(states->comp_matrix, GSL_SPMATRIX_CSC);
 }
 
-static void hadamard_gate(gsl_vector_complex *state, int qubit_num)
+static void hadamard_gate(States *states, int qubit_num)
 {
-    gsl_spmatrix *hadamard;
-    gsl_vector_complex *new_state;
     gsl_vector_view new_state_real;
     gsl_vector_view new_state_imag;
     gsl_vector_view state_real;
     gsl_vector_view state_imag;
 
-    hadamard = gsl_spmatrix_alloc(8, 8);
+    build_hadamard_matrix(states, qubit_num);
 
-    build_hadamard_matrix(&hadamard, qubit_num);
+    new_state_real = gsl_vector_complex_real(*states->new_state);
+    new_state_imag = gsl_vector_complex_imag(*states->new_state);
+    state_real = gsl_vector_complex_real(*states->current_state);
+    state_imag = gsl_vector_complex_imag(*states->current_state);
 
-    new_state = gsl_vector_complex_calloc(8);
+    gsl_spblas_dgemv(CblasNoTrans, 1.0, states->result_matrix, &state_real.vector, 0.0, &new_state_real.vector);
+    gsl_spblas_dgemv(CblasNoTrans, 1.0, states->result_matrix, &state_imag.vector, 0.0, &new_state_imag.vector);
 
-    new_state_real = gsl_vector_complex_real(new_state);
-    new_state_imag = gsl_vector_complex_imag(new_state);
-    state_real = gsl_vector_complex_real(state);
-    state_imag = gsl_vector_complex_imag(state);
-
-    gsl_spblas_dgemv(CblasNoTrans, 1.0, hadamard, &state_real.vector, 0.0, &new_state_real.vector);
-    gsl_spblas_dgemv(CblasNoTrans, 1.0, hadamard, &state_imag.vector, 0.0, &new_state_imag.vector);
-
-    /* 
-     * Copy new_state into state.
-     * This could be more elegantly achieved with pointer manipulation
-     * but there are logistical issues with GSL's internal tracking of vectors.
-     * Additionally, the state vectors are small so the vector copying functions
-     * are not too laborious to contrast the benefits of readability.
-     */
-    gsl_vector_complex_memcpy(state, new_state);
-
-    gsl_spmatrix_free(hadamard);
-    gsl_vector_complex_free(new_state);
+    swap_states(states);
 }
 
-static void build_cnot_matrix(gsl_spmatrix **cnot, int c_qubit_num, int qubit_num)
+static void build_cnot_matrix(States *states, int c_qubit_num, int qubit_num)
 {
     int not_xor_ij;
     int element;
     bool dirac_deltas_non_zero;
-    gsl_spmatrix *temp_cnot_coo;
 
     int c_q_address = (num_qubits - 1) - c_qubit_num;
     int q_address = (num_qubits - 1) - qubit_num;
 
-    temp_cnot_coo = gsl_spmatrix_alloc(8, 8);
+    /* Set all element in comp_matrix to 0. */
+    gsl_spmatrix_set_zero(states->comp_matrix);
 
     for (int i = 0; i < 8; i++) {
         for (int j = 0; j < 8; j++) {
@@ -261,18 +245,16 @@ static void build_cnot_matrix(gsl_spmatrix **cnot, int c_qubit_num, int qubit_nu
                 [(2*GET_BIT(i, c_q_address)) + GET_BIT(i, q_address)]
                 [(2*GET_BIT(j, c_q_address)) + GET_BIT(j, q_address)];
 
-                gsl_spmatrix_set(temp_cnot_coo, i, j, element);
+                gsl_spmatrix_set(states->comp_matrix, i, j, element);
             }
 
         }
     }
 
-    *cnot = gsl_spmatrix_compress(temp_cnot_coo, GSL_SPMATRIX_CSC);
-
-    gsl_spmatrix_free(temp_cnot_coo);
+    states->result_matrix = gsl_spmatrix_compress(states->comp_matrix, GSL_SPMATRIX_CSC);
 }
 
-static void cnot_gate(gsl_vector_complex *state, int c_qubit_num, int qubit_num)
+static void cnot_gate(States *states, int c_qubit_num, int qubit_num)
 {
     /*
      * The cnot matrix is to be less efficiently stored as a matrix of doubles,
@@ -281,46 +263,31 @@ static void cnot_gate(gsl_vector_complex *state, int c_qubit_num, int qubit_num)
      * due to the nature of sparse matrices, the memory consumption of the matrix 
      * will remain reasonably low.
      */
-    gsl_spmatrix *cnot;
 
-    gsl_vector_complex *new_state;
     gsl_vector_view new_state_real;
     gsl_vector_view new_state_imag;
     gsl_vector_view state_real;
     gsl_vector_view state_imag;
 
-    cnot = gsl_spmatrix_alloc(8, 8);
+    build_cnot_matrix(states, c_qubit_num, qubit_num);
 
-    build_cnot_matrix(&cnot, c_qubit_num, qubit_num);
+    new_state_real = gsl_vector_complex_real(*states->new_state);
+    new_state_imag = gsl_vector_complex_imag(*states->new_state);
+    state_real = gsl_vector_complex_real(*states->current_state);
+    state_imag = gsl_vector_complex_imag(*states->current_state);
 
-    new_state = gsl_vector_complex_calloc(8);
+    gsl_spblas_dgemv(CblasNoTrans, 1.0, states->result_matrix, &state_real.vector, 0.0, &new_state_real.vector);
+    gsl_spblas_dgemv(CblasNoTrans, 1.0, states->result_matrix, &state_imag.vector, 0.0, &new_state_imag.vector);
 
-    new_state_real = gsl_vector_complex_real(new_state);
-    new_state_imag = gsl_vector_complex_imag(new_state);
-    state_real = gsl_vector_complex_real(state);
-    state_imag = gsl_vector_complex_imag(state);
-
-    gsl_spblas_dgemv(CblasNoTrans, 1.0, cnot, &state_real.vector, 0.0, &new_state_real.vector);
-    gsl_spblas_dgemv(CblasNoTrans, 1.0, cnot, &state_imag.vector, 0.0, &new_state_imag.vector);
-
-    /* 
-     * Copy new_state into state.
-     * This could be more elegantly achieved with pointer manipulation
-     * but there are logistical issues with GSL's internal tracking of vectors.
-     * Additionally, the state vectors are small so the vector copying functions
-     * are not too laborious to contrast the benefits of readability.
-     */
-    gsl_vector_complex_memcpy(state, new_state);
-
-    gsl_spmatrix_free(cnot);
-    gsl_vector_complex_free(new_state);
+    swap_states(states);
 }
 
 static void phase_change_gate(gsl_vector_complex *state, double theta)
 {
     gsl_complex temp;
 
-    for (int i = 0; i < 8; i+=2) {
+    /* states.current_state[i] *= exp(i \theta) */
+    for (int i = 0; i < num_states; i+=2) {
         temp = gsl_vector_complex_get(state, i);
         gsl_vector_complex_set(state, i, gsl_complex_mul(temp, gsl_complex_polar(1.0, theta)));
     }
@@ -331,7 +298,7 @@ static void display_state(gsl_vector_complex *state)
     for (int i = 0; i < 8; i++) {
         printf("|%d%d%d> ", GET_BIT(i, 2), GET_BIT(i, 1), GET_BIT(i, 0));
 
-        printf("%g\n", gsl_complex_abs(gsl_vector_complex_get(state, i)));
+        printf("%.3f\n", gsl_complex_abs(gsl_vector_complex_get(state, i)));
     }
 
 }
@@ -418,6 +385,15 @@ static ErrorCode shors_algorithm(int *factors, int C, int L, int M)
     return NO_ERROR;
 }
 
+static void swap_states(States *states)
+{
+    gsl_vector_complex **temp;
+
+    temp = states->new_state;
+    states->new_state = states->current_state;
+    states->current_state = temp;
+}
+
 /****************************************************************************************
  * main -- Parse command line arguments and execute N body simulation.                  *
  *                                                                                      *
@@ -439,16 +415,41 @@ TODO:
     - Put checks on gcd algorithm?
 */
     ErrorCode error;
+    States states;
     int factors[2];
 
     // parse_command_line_args(argc, char *argv[]);
     
     num_qubits = 3;
+    num_states = INT_POW(2, num_qubits);
 
-    error = shors_algorithm(factors, 15, 3, 4);
-    ERROR_CHECK(error);
+    states.state_a = gsl_vector_complex_alloc(num_states);
+    states.state_b = gsl_vector_complex_alloc(num_states);
+    states.result_matrix = gsl_spmatrix_alloc(num_states, num_states);
+    states.comp_matrix = gsl_spmatrix_alloc(num_states, num_states);
 
-    fprintf(stdout, "Factors: (%d, %d)\n", factors[0], factors[1]);
+    states.current_state = &states.state_a;
+    states.new_state = &states.state_b;
+
+    gsl_vector_complex_set(*states.current_state, 0, gsl_complex_polar(1.0, 0.0));
+    for (int i = 1; i < num_states; i++) {
+        gsl_vector_complex_set(*states.current_state, i, gsl_complex_polar(0.0, 0.0));
+    }
+
+    hadamard_gate(&states, 1);
+    cnot_gate(&states, 1, 0);
+    cnot_gate(&states, 1, 2);
+    display_state(*states.current_state);
+
+    //error = shors_algorithm(factors, 15, 3, 4);
+    //ERROR_CHECK(error);
+
+    gsl_vector_complex_free(states.state_a);
+    gsl_vector_complex_free(states.state_b);
+    gsl_spmatrix_free(states.result_matrix);
+    gsl_spmatrix_free(states.comp_matrix);
+
+    //fprintf(stdout, "Factors: (%d, %d)\n", factors[0], factors[1]);
 
     return NO_ERROR;
 }
