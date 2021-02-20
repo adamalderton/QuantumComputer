@@ -101,6 +101,14 @@ typedef enum {
     UNKNOWN_ERROR = 5,
 } ErrorCode;
 
+typedef struct {
+    gsl_vector_complex **current;
+    gsl_vector_complex **new;
+    gsl_vector_complex *state_a;
+    gsl_vector_complex *state_b;
+    gsl_spmatrix *matrix;
+} States;
+
 /* Global Variables */
 
 const double HADAMARD_2x2[2][2] = {
