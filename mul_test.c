@@ -38,7 +38,6 @@ static void operate_matrix(gsl_spmatrix_int *matrix, gsl_vector_int *vec, gsl_ve
     }
 }
 
-
 int main()  {
 
     gsl_vector_int *vec;
