@@ -47,7 +47,7 @@
 
 #define LOW_POWER_TOLERANCE 5
 
-#define DO_GATE -1
+#define ALT_ELMT -1
 
 /* 
  * Many functions below return an errorcode. This macro is called after these functions return
@@ -133,15 +133,15 @@ const int CNOT_4x4[4][4] = {
 const int aTOx_MODC_4x4[4][4] = {
     {1, 0, 0, 0},
     {0, 1, 0, 0},
-    {0, 0, DO_GATE, 0},
-    {0, 0, 0, DO_GATE}
+    {0, 0, ALT_ELMT, 0},
+    {0, 0, 0, ALT_ELMT}
 };
 
 const int PHASE_CHANGE_4x4[4][4] = {
     {1, 0, 0, 0},
     {0, 1, 0, 0},
     {0, 0, 1, 0},
-    {0, 0, 0, DO_GATE}
+    {0, 0, 0, ALT_ELMT}
 };
 
 int num_qubits;
@@ -151,6 +151,8 @@ int num_states;
 /***********************************FUNCTION PROTOTYPES**********************************/
 static void swap_states(Assets *assets);
 static void display_state(gsl_vector_complex *state);
+
+static void operate_matrix(Assets *assets, double scale, gsl_complex alt_element);
 
 /****************************************************************************************/
 
@@ -212,20 +214,9 @@ static void build_hadamard_matrix(Assets *assets, int qubit_num)
 
 static void hadamard_gate(Assets *assets, int qubit_num)
 {
-    gsl_vector_view new_state_real;
-    gsl_vector_view new_state_imag;
-    gsl_vector_view state_real;
-    gsl_vector_view state_imag;
-
     build_hadamard_matrix(assets, qubit_num);
 
-    new_state_real = gsl_vector_complex_real(*assets->new_state);
-    new_state_imag = gsl_vector_complex_imag(*assets->new_state);
-    state_real = gsl_vector_complex_real(*assets->current_state);
-    state_imag = gsl_vector_complex_imag(*assets->current_state);
-
-    gsl_spblas_dgemv(CblasNoTrans, 1.0, assets->result_matrix, &state_real.vector, 0.0, &new_state_real.vector);
-    gsl_spblas_dgemv(CblasNoTrans, 1.0, assets->result_matrix, &state_imag.vector, 0.0, &new_state_imag.vector);
+    operate_matrix(assets, 1.0/M_SQRT2, gsl_complex_rect(0.0, 0.0));
 
     swap_states(assets);
 }
@@ -335,7 +326,7 @@ static void build_atox_modC_gate(Assets *assets, int c_qubit_num, int qubit_num,
                 [(2*GET_BIT(i, c_q_address)) + GET_BIT(i, q_address)]
                 [(2*GET_BIT(j, c_q_address)) + GET_BIT(j, q_address)];
 
-                if (element == DO_GATE) {
+                if (element == ALT_ELMT) {
                     element = INT_POW(a, x) % C;
                 }
 
@@ -412,7 +403,7 @@ static void build_phase_change_gate(Assets *assets, int c_qubit_num, int qubit_n
                 [(2*GET_BIT(i, c_q_address)) + GET_BIT(i, q_address)]
                 [(2*GET_BIT(j, c_q_address)) + GET_BIT(j, q_address)];
 
-                if (element == DO_GATE) {
+                if (element == ALT_ELMT) {
                     element = part;
                 }
 
@@ -562,6 +553,58 @@ static ErrorCode shors_algorithm(Assets *assets, int *factors, int C, int L, int
     return NO_ERROR;
 }
 
+static void operate_matrix(Assets *assets, double scale, gsl_complex alt_element)
+{
+    gsl_vector_complex *n_state;
+    gsl_vector_complex *c_state;
+    gsl_spmatrix *mat;
+    int n_stride;
+    int c_stride;
+    double c_real;
+    double c_imag;
+    double m_real;
+    double m_imag;
+
+    n_state = *assets->new_state;
+    c_state = *assets->current_state;
+    mat = assets->result_matrix;
+
+    n_stride = n_state->stride;
+    c_stride = c_state->stride;
+
+    if (scale == 0.0) {
+        gsl_vector_complex_set_zero(n_state);
+        return;
+    }
+
+    gsl_vector_complex_set_zero(n_state);
+
+    for (int j = 0; j < num_states; j++) {
+        for (int p = mat->p[j]; p < mat->p[j + 1]; p++) {
+
+            /* Retrieve matrix element. */
+            m_real = mat->data[p];
+            m_imag = 0.0;
+
+            if (m_real == (double) ALT_ELMT) {
+                m_real = GSL_REAL(alt_element);
+                m_imag = GSL_IMAG(alt_element);
+            }
+
+            /* Retrieve corresponding element in current_state vector. */
+            c_real = c_state->data[2 * c_stride * j];
+            c_imag = c_state->data[2 * c_stride * j + 1];
+
+            /* Real part. */
+            n_state->data[2 * n_stride * mat->i[p]] += ( (m_real * c_real) - (m_imag * c_imag) );
+
+            /* Imaginary part. */
+            n_state->data[2 * n_stride * mat->i[p] + 1] += ( (m_real * c_imag) + (m_imag * c_real) );
+        }
+    }
+
+}
+
 /****************************************************************************************
  * main -- Parse command line arguments and execute N body simulation.                  *
  *                                                                                      *
@@ -594,12 +637,7 @@ int main(int argc, char *argv[])
 
     //error = shors_algorithm(&assets, factors, 15, 3, 4);
     //ERROR_CHECK(error);
-
-    display_state(*assets.current_state);
-
     hadamard_gate(&assets, 0);
-
-    printf("----\n");
 
     display_state(*assets.current_state);
 
