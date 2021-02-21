@@ -86,7 +86,7 @@
  * Therefore, the result is rightshfted n places to yield either 1 or 0.
  */
 #define GET_BIT(int, n) \
-    ( (int & (1<<n)) >> n )
+    ( (int & (1 << n)) >> n )
 
 #define INT_POW(base, power) \
     ( (int) (pow(base, power) + 0.5) ) 
