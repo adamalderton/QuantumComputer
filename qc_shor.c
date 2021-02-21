@@ -47,8 +47,10 @@
 
 #define HADAMARD_SCALE 1.0/M_SQRT2
 #define NULL_ALT_ELEMENT gsl_complex_rect(0.0, 0.0)
+#define NO_CONDITIONAL_QUBIT -1
+
 #define LOW_POWER_TOLERANCE 5
-#define ALT_ELMT -INT_MAX
+#define ALT_ELMNT -INT_MAX
 
 /* 
  * Many functions below return an errorcode. This macro is called after these functions return
@@ -100,12 +102,24 @@
 /* Enum to store the various error codes than can be returned within this program. */
 typedef enum {
     NO_ERROR = 0,
-    GSL_ERROR = 1,
-    BAD_ARGUMENTS = 2,
-    BAD_FILENAME = 3,
-    BAD_FILE = 4,
-    UNKNOWN_ERROR = 5,
+    GSL_ERROR,
+    BAD_ARGUMENTS,
+    BAD_FILENAME,
+    BAD_FILE,
+    UNKNOWN_ERROR,
 } ErrorCode;
+
+typedef enum {
+    HADAMARD_GATE_TYPE,
+    CNOT_GATE_TYPE,
+    ATOX_GATE_TYPE,
+    PHASE_CHANGE_GATE_TYPE
+} GateType;
+
+typedef struct {
+    GateType type;
+    int base[4][4];
+} Gate;
 
 typedef struct {
     gsl_vector_complex **current_state;
@@ -123,49 +137,59 @@ typedef struct {
  * such that it can be stored as an integer matrix.
  * This scalar factor is implemented later in appropriate functions.
  */
-const int HADAMARD_BASE[2][2] = {
-    {1, 1},
-    {1, -1}
+const Gate HADAMARD_GATE = {
+    HADAMARD_GATE_TYPE,
+    {
+        {1, 1, 0, 0},
+        {1, -1, 0, 0},
+        {0, 0, 0, 0},
+        {0, 0, 0, 0}
+    }
 };
 
-/* TODO: EXPLAIN WHY IT IS DOUBLE TYPE. */
-
-const int CNOT_BASE[4][4] = {
-    {1, 0, 0, 0},
-    {0, 1, 0, 0},
-    {0, 0, 0, 1},
-    {0, 0, 1, 0}
+const Gate CNOT_GATE = {
+    CNOT_GATE_TYPE,
+    {
+        {1, 0, 0, 0},
+        {0, 1, 0, 0},
+        {0, 0, 0, 1},
+        {0, 0, 1, 0}
+    }
 };
 
-const int aTOx_MODC_BASE[4][4] = {
-    {1, 0, 0, 0},
-    {0, 1, 0, 0},
-    {0, 0, ALT_ELMT, 0},
-    {0, 0, 0, ALT_ELMT}
+const Gate aTOx_MODC_GATE = {
+    ATOX_GATE_TYPE,
+    {
+        {1, 0, 0, 0},
+        {0, 1, 0, 0},
+        {0, 0, ALT_ELMNT, 0},
+        {0, 0, 0, ALT_ELMNT}
+    }
 };
 
-const int PHASE_CHANGE_BASE[4][4] = {
-    {1, 0, 0, 0},
-    {0, 1, 0, 0},
-    {0, 0, 1, 0},
-    {0, 0, 0, ALT_ELMT}
+const Gate C_PHASE_CHANGE_GATE = {
+    PHASE_CHANGE_GATE_TYPE,
+    {
+        {1, 0, 0, 0},
+        {0, 1, 0, 0},
+        {0, 0, 1, 0},
+        {0, 0, 0, ALT_ELMNT}
+    }
 };
-
 
 int num_qubits;
 int num_states;
 
-
 /***********************************FUNCTION PROTOTYPES**********************************/
 static void swap_states(Assets *assets);
 static void display_state(gsl_vector_complex *state);
-
 static void operate_matrix(Assets *assets, double scale, gsl_complex alt_element);
 
 /****************************************************************************************/
 
-static void build_cnot_matrix(Assets *assets, int c_qubit_num, int qubit_num)
+static void build_matrix(Assets *assets, Gate gate, int c_qubit_num, int qubit_num)
 {
+    bool base_is_hadamard = false;
     int not_xor_ij;
     int element;
     bool dirac_deltas_non_zero;
@@ -176,13 +200,13 @@ static void build_cnot_matrix(Assets *assets, int c_qubit_num, int qubit_num)
     /* Set all element in comp_matrix to 0. */
     gsl_spmatrix_int_set_zero(assets->comp_matrix);
 
-    for (int i = 0; i < 8; i++) {
-        for (int j = 0; j < 8; j++) {
+    for (int i = 0; i < num_states; i++) {
+        for (int j = 0; j < num_states; j++) {
             dirac_deltas_non_zero = true;
 
             not_xor_ij = ~(i ^ j);
 
-            for (int b = 0; b < 2*2*2; b++) {
+            for (int b = 0; b < num_states; b++) {
 
                 if ( (b != q_address) && (b != c_q_address) ) {
                     if (GET_BIT(not_xor_ij, b) == 0) {
@@ -194,87 +218,44 @@ static void build_cnot_matrix(Assets *assets, int c_qubit_num, int qubit_num)
 
             if (dirac_deltas_non_zero) {
 
-                element = CNOT_BASE
-                [(2*GET_BIT(i, c_q_address)) + GET_BIT(i, q_address)]
-                [(2*GET_BIT(j, c_q_address)) + GET_BIT(j, q_address)];
+                if (gate.type == HADAMARD_GATE_TYPE) {
+                    element = gate.base[GET_BIT(i, q_address)][GET_BIT(j, q_address)];
+                } else {
+                    element = gate.base
+                        [(2*GET_BIT(i, c_q_address)) + GET_BIT(i, q_address)]
+                        [(2*GET_BIT(j, c_q_address)) + GET_BIT(j, q_address)];
+                }
 
                 gsl_spmatrix_int_set(assets->comp_matrix, i, j, element);
             }
-
         }
     }
 
     gsl_spmatrix_int_csc(assets->result_matrix, assets->comp_matrix);
 }
 
-static void cnot_gate(Assets *assets, int c_qubit_num, int qubit_num)
+static void c_phase_shift_gate(Assets *assets, int c_qubit_num, int qubit_num, double theta)
 {
-    build_cnot_matrix(assets, c_qubit_num, qubit_num);
+    build_matrix(assets, C_PHASE_CHANGE_GATE, c_qubit_num, qubit_num);
 
-    operate_matrix(assets, 1.0, gsl_complex_rect(0.0, 0.0));
+    operate_matrix(assets, 1.0, gsl_complex_polar(1.0, theta));
 
     swap_states(assets);
 }
 
-static void build_hadamard_matrix(Assets *assets, int qubit_num)
+static void cnot_gate(Assets *assets, int c_qubit_num, int qubit_num)
 {
-    int not_xor_ij;
-    int nth_address;
-    bool dirac_deltas_non_zero;
+    build_matrix(assets, CNOT_GATE, c_qubit_num, qubit_num);
 
-    nth_address = (num_qubits - 1) - qubit_num;
+    operate_matrix(assets, 1.0, NULL_ALT_ELEMENT);
 
-    /* Set all element in comp_matrix to 0. */
-    gsl_spmatrix_int_set_zero(assets->comp_matrix);
-
-    for (int i = 0; i < num_states; i++) {
-        for (int j = 0; j < num_states; j++) {
-            dirac_deltas_non_zero = true;
-            
-            /* 
-             * Bitwise EXCLUSIVE OR of integers i and j, followed by a
-             * bitwise NOT operation.
-             * This is similar to the AND operation, except 1 is returned for 
-             * two 1s and for two 0s, as per the nature of the Kronecker delta.
-             */
-            not_xor_ij = ~(i ^ j);
-
-            /* Loop over bits in not_xor_ij. */
-            for (int b = 0; b < num_states; b++) {
-    
-                /* 
-                 * If at least one bit in not_xor_ij is 0, the (i,j)'th element in the matrix will be 0.
-                 * All elements of hadamard matrix passed are already initialised to 0, so break 'b' loop.
-                 */
-
-                if (b != nth_address) {
-                    if (GET_BIT(not_xor_ij, b) == 0) {
-                        dirac_deltas_non_zero = false;
-                        break;
-                    }
-                }
-            }
-
-            if (dirac_deltas_non_zero) {
-
-                /* 
-                 * If all the Kronecker deltas in this term are 1, what's left is to actually find the 
-                 * H value. To do this, extract the nth_address'th digits in the binary representations
-                 * of i and j. These values, each 0 or 1, are the indices of the value to extract from
-                 * the 2x2 Hadamard materix, HADAMARD_2x2.
-                 */
-
-                gsl_spmatrix_int_set(assets->comp_matrix, i, j, HADAMARD_BASE[GET_BIT(i, nth_address)][GET_BIT(j, nth_address)]);
-            }
-        }
-    }
-
-    gsl_spmatrix_int_csc(assets->result_matrix, assets->comp_matrix);
+    swap_states(assets);
 }
 
 static void hadamard_gate(Assets *assets, int qubit_num)
 {
-    build_hadamard_matrix(assets, qubit_num);
+
+    build_matrix(assets, HADAMARD_GATE, NO_CONDITIONAL_QUBIT, qubit_num);
 
     operate_matrix(assets, HADAMARD_SCALE, NULL_ALT_ELEMENT);
 
@@ -338,7 +319,7 @@ static void operate_matrix(Assets *assets, double scale, gsl_complex alt_element
             m_real = mat->data[p];
             m_imag = 0.0;
 
-            if (m_real == (double) ALT_ELMT) {
+            if (m_real == (double) ALT_ELMNT) {
                 m_real = GSL_REAL(alt_element);
                 m_imag = GSL_IMAG(alt_element);
             }
@@ -376,21 +357,16 @@ int main(int argc, char *argv[])
     assets.current_state = &assets.state_a;
     assets.new_state = &assets.state_b;
 
+    /* Move me into shors algorithm. */
     gsl_vector_complex_set_zero(*assets.current_state);
     gsl_vector_complex_set(*assets.current_state, 0, gsl_complex_polar(1.0, 0.0));
 
     //error = shors_algorithm(&assets, factors, 15, 3, 4);
     //ERROR_CHECK(error);
 
-
-    phase_change_gate(&assets, 0, 2, M_PI);
-
-    for (int i = 0; i < num_states; i++) {
-        for (int j = 0; j < num_states; j++) {
-            printf("%d ", gsl_spmatrix_int_get(assets.result_matrix, i, j));
-        }
-        printf("\n");
-    }
+    hadamard_gate(&assets, 0);
+    cnot_gate(&assets, 1, 0);
+    cnot_gate(&assets, 1, 2);
 
     display_state(*assets.current_state);
 
