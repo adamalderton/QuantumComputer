@@ -89,7 +89,10 @@
     ( (int & (1 << n)) >> n )
 
 #define INT_POW(base, power) \
-    ( (int) (pow(base, power) + 0.5) ) 
+    ( (int) (pow(base, power) + 0.5) )
+
+#define NON_ZERO_ESTIMATE(num_qubits) \
+    ( (int) M_SQRT2 * num_qubits )
 
 /***********************************TYPEDEFS AND GLOBALS*********************************/
 
@@ -580,8 +583,8 @@ int main(int argc, char *argv[])
 
     assets.state_a = gsl_vector_complex_alloc(num_states);
     assets.state_b = gsl_vector_complex_alloc(num_states);
-    assets.result_matrix = gsl_spmatrix_alloc(num_states, num_states);
     assets.comp_matrix = gsl_spmatrix_alloc(num_states, num_states);
+    assets.result_matrix = gsl_spmatrix_alloc_nzmax(num_states, num_states, NON_ZERO_ESTIMATE(num_qubits), GSL_SPMATRIX_CSC);
 
     assets.current_state = &assets.state_a;
     assets.new_state = &assets.state_b;
@@ -589,8 +592,16 @@ int main(int argc, char *argv[])
     gsl_vector_complex_set_zero(*assets.current_state);
     gsl_vector_complex_set(*assets.current_state, 0, gsl_complex_polar(1.0, 0.0));
 
-    error = shors_algorithm(&assets, factors, 15, 3, 4);
-    ERROR_CHECK(error);
+    //error = shors_algorithm(&assets, factors, 15, 3, 4);
+    //ERROR_CHECK(error);
+
+    display_state(*assets.current_state);
+
+    hadamard_gate(&assets, 0);
+
+    printf("----\n");
+
+    display_state(*assets.current_state);
 
     gsl_vector_complex_free(assets.state_a);
     gsl_vector_complex_free(assets.state_b);
