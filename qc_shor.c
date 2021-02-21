@@ -204,7 +204,7 @@ static void build_hadamard_matrix(Assets *assets, int qubit_num)
         }
     }
 
-    assets->result_matrix = gsl_spmatrix_compress(assets->comp_matrix, GSL_SPMATRIX_CSC);
+    gsl_spmatrix_csc(assets->result_matrix, assets->comp_matrix);
 }
 
 static void hadamard_gate(Assets *assets, int qubit_num)
@@ -267,7 +267,7 @@ static void build_cnot_matrix(Assets *assets, int c_qubit_num, int qubit_num)
         }
     }
 
-    assets->result_matrix = gsl_spmatrix_compress(assets->comp_matrix, GSL_SPMATRIX_CSC);
+    gsl_spmatrix_csc(assets->result_matrix, assets->comp_matrix);
 }
 
 static void cnot_gate(Assets *assets, int c_qubit_num, int qubit_num)
@@ -341,7 +341,7 @@ static void build_atox_modC_gate(Assets *assets, int c_qubit_num, int qubit_num,
         }
     }
 
-    assets->result_matrix = gsl_spmatrix_compress(assets->comp_matrix, GSL_SPMATRIX_CSC);
+    gsl_spmatrix_csc(assets->result_matrix, assets->comp_matrix);
 }
 
 static void atox_modC_gate(Assets *assets, int c_qubit_num, int qubit_num, int a, int x, int C)
@@ -418,7 +418,7 @@ static void build_phase_change_gate(Assets *assets, int c_qubit_num, int qubit_n
         }
     }
 
-    assets->result_matrix = gsl_spmatrix_compress(assets->comp_matrix, GSL_SPMATRIX_CSC);
+    gsl_spmatrix_csc(assets->result_matrix, assets->comp_matrix);
 }
 
 static void phase_change_gate(Assets *assets, int c_qubit_num, int qubit_num, double theta)
