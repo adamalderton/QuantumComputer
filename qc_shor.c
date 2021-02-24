@@ -94,9 +94,6 @@
 #define INT_POW(base, power) \
     ( (int) (pow(base, power) + 0.5) )
 
-#define NON_ZERO_ESTIMATE(num_qubits) \
-    ( (int) M_SQRT2 * num_qubits )
-
 /***********************************TYPEDEFS AND GLOBALS*********************************/
 
 /* Enum to store the various error codes than can be returned within this program. */
@@ -112,8 +109,8 @@ typedef enum {
 typedef enum {
     HADAMARD_GATE_TYPE,
     CNOT_GATE_TYPE,
-    ATOX_GATE_TYPE,
-    PHASE_CHANGE_GATE_TYPE
+    C_APOWX_GATE_TYPE,
+    C_PHASE_SHIFT_GATE_TYPE
 } GateType;
 
 typedef struct {
@@ -157,8 +154,8 @@ const Gate CNOT_GATE = {
     }
 };
 
-const Gate aTOx_MODC_GATE = {
-    ATOX_GATE_TYPE,
+const Gate C_APOWX_GATE = {
+    C_APOWX_GATE_TYPE,
     {
         {1, 0, 0, 0},
         {0, 1, 0, 0},
@@ -167,8 +164,8 @@ const Gate aTOx_MODC_GATE = {
     }
 };
 
-const Gate C_PHASE_CHANGE_GATE = {
-    PHASE_CHANGE_GATE_TYPE,
+const Gate C_PHASE_SHIFT_GATE = {
+    C_PHASE_SHIFT_GATE_TYPE,
     {
         {1, 0, 0, 0},
         {0, 1, 0, 0},
@@ -234,9 +231,16 @@ static void build_matrix(Assets *assets, Gate gate, int c_qubit_num, int qubit_n
     gsl_spmatrix_int_csc(assets->result_matrix, assets->comp_matrix);
 }
 
+static void c_apowx_gate(Assets *assets, int c_qubit_num, int qubit_num, int C, int a, int x)
+{
+    build_matrix(assets, C_APOWX_GATE, c_qubit_num, qubit_num);
+
+    operate_matrix(assets, 1.0, gsl_complex_rect(INT_POW(a, x) % C, 0.0));
+}
+
 static void c_phase_shift_gate(Assets *assets, int c_qubit_num, int qubit_num, double theta)
 {
-    build_matrix(assets, C_PHASE_CHANGE_GATE, c_qubit_num, qubit_num);
+    build_matrix(assets, C_PHASE_SHIFT_GATE, c_qubit_num, qubit_num);
 
     operate_matrix(assets, 1.0, gsl_complex_polar(1.0, theta));
 
@@ -319,7 +323,7 @@ static void operate_matrix(Assets *assets, double scale, gsl_complex alt_element
             m_real = mat->data[p];
             m_imag = 0.0;
 
-            if (m_real == (double) ALT_ELMNT) {
+            if ((int) m_real == ALT_ELMNT) {
                 m_real = GSL_REAL(alt_element);
                 m_imag = GSL_IMAG(alt_element);
             }
@@ -329,13 +333,114 @@ static void operate_matrix(Assets *assets, double scale, gsl_complex alt_element
             c_imag = c_state->data[2 * c_stride * j + 1];
 
             /* Real part. */
-            n_state->data[2 * n_stride * mat->i[p]] += ( (m_real * c_real) - (m_imag * c_imag) );
+            n_state->data[2 * n_stride * mat->i[p]] += (m_real * c_real) - (m_imag * c_imag);
 
             /* Imaginary part. */
-            n_state->data[2 * n_stride * mat->i[p] + 1] += ( (m_real * c_imag) + (m_imag * c_real) );
+            n_state->data[2 * n_stride * mat->i[p] + 1] += (m_real * c_imag) + (m_imag * c_real);
         }
     }
 
+}
+
+static int greatest_common_divisor(int a, int b)
+{
+    int temp;
+
+    /* Trivial cases. */
+    if (a == 0) {
+        return b;
+    }
+    if (b == 0) {
+        return a;
+    }
+    if (a == b) {
+        return a;
+    }
+
+    /* Simple iterative version of Euclid's algorithm. */
+    while ((a % b) > 0) {
+        temp = a % b;
+        a = b;
+        b = temp;
+    }
+
+    return b;
+}
+
+static bool is_power(int small_int, int C)
+{
+    /* If C is divisible by small_int, it is a power of small_int */
+    if (C % small_int == 0) {
+        return true;
+    } else {
+        return false;
+    }
+}
+
+static int find_period(Assets *assets, int a, int C, int L, int M)
+{
+    int period;
+
+    /* Apply Hadamard gate to qubits in the L register. */
+    for (int i = 0; i < L; i++) {
+        hadamard_gate(assets, i);
+    }
+
+    /* 
+     * Apply conditional a^x (mod C) gate to M register. 
+     * Here, x is the power of 2 corresponding to the qubit
+     */
+    for (int l = 0; l < L; l++) {
+        for (int m = L; m < num_qubits; m++) {
+            c_apowx_gate(assets, l, m, a, INT_POW(2, l), C);
+        }
+    }
+
+    /* Inverse quantum Fourier transform (7 qubits only). */
+
+
+    return period;
+}
+
+static ErrorCode shors_algorithm(Assets *assets, int factors[2], int C, int L, int M)
+{
+    int period;
+    int gcd;
+
+    for (int i = 2; i < LOW_POWER_TOLERANCE; i++) {
+        if (is_power(i, C)) {
+            factors[0] = i;
+            factors[1] = C / i;
+            return NO_ERROR;
+        }
+    }
+
+    for (int trial_int = LOW_POWER_TOLERANCE; trial_int < C; trial_int++) {
+        
+        gcd = greatest_common_divisor(trial_int, C);
+
+        if (gcd > 1) {
+            factors[0] = gcd;
+            factors[1] = C / gcd;
+            
+            return NO_ERROR;
+        }
+
+        period = find_period(assets, trial_int, C, L, M);
+
+        if ( (p % 2 == 0) && ( (INT_POW(trial_int, p / 2) + 1) % C == 0 ) ) {
+            continue;
+        } else {
+            continue;
+        }
+
+        factors[0] = greatest_common_divisor(INT_POW(trial_int, period / 2) + 1, C);
+        factors[1] = greatest_common_divisor(INT_POW(trial_int, period / 2) - 1, C);
+
+        break;
+    }
+
+    return NO_ERROR;
 }
 
 int main(int argc, char *argv[])
