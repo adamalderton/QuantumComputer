@@ -428,7 +428,7 @@ static ErrorCode shors_algorithm(Assets *assets, int factors[2], int C, int L, i
 
         period = find_period(assets, trial_int, C, L, M);
 
-        if ( (p % 2 == 0) && ( (INT_POW(trial_int, p / 2) + 1) % C == 0 ) ) {
+        if ( (period % 2 == 0) && ( (INT_POW(trial_int, period / 2) + 1) % C == 0 ) ) {
             continue;
         } else {
             continue;
