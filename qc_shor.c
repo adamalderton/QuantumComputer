@@ -94,6 +94,9 @@
 #define INT_POW(base, power) \
     ( (int) (pow(base, power) + 0.5) )
 
+#define NON_ZERO_ESTIMATE(num_qubits) \
+    ( num_qubits )
+
 /***********************************TYPEDEFS AND GLOBALS*********************************/
 
 /* Enum to store the various error codes than can be returned within this program. */
@@ -108,8 +111,6 @@ typedef enum {
 
 typedef enum {
     HADAMARD_GATE_TYPE,
-    CNOT_GATE_TYPE,
-    C_APOWX_GATE_TYPE,
     C_PHASE_SHIFT_GATE_TYPE
 } GateType;
 
@@ -119,6 +120,7 @@ typedef struct {
 } Gate;
 
 typedef struct {
+    int register_size[2];
     gsl_vector_complex **current_state;
     gsl_vector_complex **new_state;
     gsl_vector_complex *state_a;
@@ -144,26 +146,6 @@ const Gate HADAMARD_GATE = {
     }
 };
 
-const Gate CNOT_GATE = {
-    CNOT_GATE_TYPE,
-    {
-        {1, 0, 0, 0},
-        {0, 1, 0, 0},
-        {0, 0, 0, 1},
-        {0, 0, 1, 0}
-    }
-};
-
-const Gate C_APOWX_GATE = {
-    C_APOWX_GATE_TYPE,
-    {
-        {1, 0, 0, 0},
-        {0, 1, 0, 0},
-        {0, 0, ALT_ELMNT, 0},
-        {0, 0, 0, ALT_ELMNT}
-    }
-};
-
 const Gate C_PHASE_SHIFT_GATE = {
     C_PHASE_SHIFT_GATE_TYPE,
     {
@@ -186,16 +168,12 @@ static void operate_matrix(Assets *assets, double scale, gsl_complex alt_element
 
 static void build_matrix(Assets *assets, Gate gate, int c_qubit_num, int qubit_num)
 {
-    bool base_is_hadamard = false;
     int not_xor_ij;
     int element;
     bool dirac_deltas_non_zero;
 
     int c_q_address = (num_qubits - 1) - c_qubit_num;
     int q_address = (num_qubits - 1) - qubit_num;
-
-    /* Set all element in comp_matrix to 0. */
-    gsl_spmatrix_int_set_zero(assets->comp_matrix);
 
     for (int i = 0; i < num_states; i++) {
         for (int j = 0; j < num_states; j++) {
@@ -231,27 +209,11 @@ static void build_matrix(Assets *assets, Gate gate, int c_qubit_num, int qubit_n
     gsl_spmatrix_int_csc(assets->result_matrix, assets->comp_matrix);
 }
 
-static void c_apowx_gate(Assets *assets, int c_qubit_num, int qubit_num, int C, int a, int x)
-{
-    build_matrix(assets, C_APOWX_GATE, c_qubit_num, qubit_num);
-
-    operate_matrix(assets, 1.0, gsl_complex_rect(INT_POW(a, x) % C, 0.0));
-}
-
 static void c_phase_shift_gate(Assets *assets, int c_qubit_num, int qubit_num, double theta)
 {
     build_matrix(assets, C_PHASE_SHIFT_GATE, c_qubit_num, qubit_num);
 
     operate_matrix(assets, 1.0, gsl_complex_polar(1.0, theta));
-
-    swap_states(assets);
-}
-
-static void cnot_gate(Assets *assets, int c_qubit_num, int qubit_num)
-{
-    build_matrix(assets, CNOT_GATE, c_qubit_num, qubit_num);
-
-    operate_matrix(assets, 1.0, NULL_ALT_ELEMENT);
 
     swap_states(assets);
 }
@@ -266,10 +228,92 @@ static void hadamard_gate(Assets *assets, int qubit_num)
     swap_states(assets);
 }
 
+/* 
+ * This gate is built differently to other gates, so it is built within this function.
+ * Therefore, the build_matrix function is not used.
+ */
+static void c_amodc_gate(Assets *assets, int c_qubit_num, int atox, int C)
+{
+    int A; /* Holds a^x (mod C). */
+    int M_size;
+    int j; /* The column of the matrix in row k in which the 1 resides. */
+    int f; /* Used in the calculation of the permutation matrix. */
+
+    A = atox % C;
+    M_size = assets->register_size[1];
+
+    /* Using notation from instruction document, loop over rows (k) of matrix. */
+    for (int k = 0; k < num_states; k++) {
+
+        /* If l_0 (c_qubit_num) is 0, j = k. */
+        if (GET_BIT(k, c_qubit_num) == 0) {
+            gsl_spmatrix_int_set(assets->comp_matrix, k, k, 1);
+            continue;
+        
+        /* If l_0 = 1 ... */
+        } else {
+
+            /* f must be calculated, which is the decimal value stored in the M register. */
+            f = 0;
+            for (int b = 0; b < M_size; b++) {
+                f += GET_BIT(k, b) << b;
+            }
+
+            /* 
+             * The calculation above could have been omitted, and just the bits
+             * above and including the nearest power of 2 to C, rounding up,
+             * could have been tested for any values of 1. However, for simplicity
+             * and readability, and considering the speed of bitwise calculations,
+             * this approach of calculating f every time was taken.
+             */
+            if (j >= C) {
+
+                gsl_spmatrix_int_set(assets->comp_matrix, k, k, 1);
+                continue;
+
+            } else {
+
+                /* Calculate f', which can be stored in f for simplicity. */
+                f = (A * f) % C;
+
+                /* Next, build up the integer value j using f'. */
+                j = 0;
+
+                /* M register (concerning f'). */
+                for (int b = 0; b < M_size; b++) {
+                    j += GET_BIT(f, b) << b;
+                }
+
+                /* L register (concerning k). */
+                for (int b = M_size; b < num_qubits; b++) {
+                    j += GET_BIT(k, b) << b;
+                }
+
+                gsl_spmatrix_int_set(assets->comp_matrix, k, j, 1);
+            }
+        }
+    }
+
+    /* Finally, compress the matrix stored in comp_matrix into result_matrix. */
+    gsl_spmatrix_int_csc(assets->result_matrix, assets->comp_matrix);
+
+
+
+    /* Now the matrix has been built, operate it as with any other gate. */
+    //operate_matrix(assets, 1.0, NULL_ALT_ELEMENT);
+
+    swap_states(assets);
+}
+
 static void display_state(gsl_vector_complex *state)
 {
-    for (int i = 0; i < 8; i++) {
-        printf("|%d%d%d> ", GET_BIT(i, 2), GET_BIT(i, 1), GET_BIT(i, 0));
+    for (int i = 0; i < num_states; i++) {
+        printf("|");
+        //printf("|%d%d%d> ", GET_BIT(i, 2), GET_BIT(i, 1), GET_BIT(i, 0));
+        for (int b = num_qubits - 1; b >= 0; b--) {
+            printf("%d", GET_BIT(i, b));
+        }
+        printf("> ");
 
         printf("%.3f\n", gsl_complex_abs(gsl_vector_complex_get(state, i)));
     }
@@ -283,6 +327,9 @@ static void swap_states(Assets *assets)
     temp = assets->new_state;
     assets->new_state = assets->current_state;
     assets->current_state = temp;
+
+    /* Reset comp_matrix. */
+    gsl_spmatrix_int_set_zero(assets->comp_matrix);
 }
 
 static void operate_matrix(Assets *assets, double scale, gsl_complex alt_element)
@@ -392,7 +439,8 @@ static int find_period(Assets *assets, int a, int C, int L, int M)
      */
     for (int l = 0; l < L; l++) {
         for (int m = L; m < num_qubits; m++) {
-            c_apowx_gate(assets, l, m, a, INT_POW(2, l), C);
+            //c_amodc_gate(assets,);
+            1 == 1;
         }
     }
 
@@ -451,8 +499,11 @@ int main(int argc, char *argv[])
 
     // parse_command_line_args(argc, char *argv[]);
     
-    num_qubits = 3;
+    num_qubits = 7;
     num_states = INT_POW(2, num_qubits);
+
+    assets.register_size[0] = 3; /* L register. */
+    assets.register_size[1] = 4; /* M register. */
 
     assets.state_a = gsl_vector_complex_alloc(num_states);
     assets.state_b = gsl_vector_complex_alloc(num_states);
@@ -469,11 +520,6 @@ int main(int argc, char *argv[])
     //error = shors_algorithm(&assets, factors, 15, 3, 4);
     //ERROR_CHECK(error);
 
-    hadamard_gate(&assets, 0);
-    cnot_gate(&assets, 1, 0);
-    cnot_gate(&assets, 1, 2);
-
-    display_state(*assets.current_state);
 
     gsl_vector_complex_free(assets.state_a);
     gsl_vector_complex_free(assets.state_b);
