@@ -297,10 +297,8 @@ static void c_amodc_gate(Assets *assets, int c_qubit_num, int atox, int C)
     /* Finally, compress the matrix stored in comp_matrix into result_matrix. */
     gsl_spmatrix_int_csc(assets->result_matrix, assets->comp_matrix);
 
-
-
     /* Now the matrix has been built, operate it as with any other gate. */
-    //operate_matrix(assets, 1.0, NULL_ALT_ELEMENT);
+    operate_matrix(assets, 1.0, NULL_ALT_ELEMENT);
 
     swap_states(assets);
 }
@@ -519,7 +517,6 @@ int main(int argc, char *argv[])
 
     //error = shors_algorithm(&assets, factors, 15, 3, 4);
     //ERROR_CHECK(error);
-
 
     gsl_vector_complex_free(assets.state_a);
     gsl_vector_complex_free(assets.state_b);
