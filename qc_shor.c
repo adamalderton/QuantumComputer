@@ -113,16 +113,6 @@ typedef enum {
     UNKNOWN_ERROR,
 } ErrorCode;
 
-typedef enum {
-    HADAMARD_GATE_TYPE,
-    C_PHASE_SHIFT_GATE_TYPE
-} GateType;
-
-typedef struct {
-    GateType type;
-    int base[4][4];
-} Gate;
-
 typedef struct {
     int register_size[2];
     gsl_vector_complex **current_state;
@@ -140,35 +130,102 @@ typedef struct {
  * such that it can be stored as an integer matrix.
  * This scalar factor is implemented later in appropriate functions.
  */
-const Gate HADAMARD_GATE = {
-    HADAMARD_GATE_TYPE,
-    {
-        {1, 1, 0, 0},
-        {1, -1, 0, 0},
-        {0, 0, 0, 0},
-        {0, 0, 0, 0}
-    }
+const int HADAMARD_BASE_MATRIX[2][2] = {
+    {1, 1},
+    {1, -1}
 };
 
-const Gate C_PHASE_SHIFT_GATE = {
-    C_PHASE_SHIFT_GATE_TYPE,
-    {
-        {1, 0, 0, 0},
-        {0, 1, 0, 0},
-        {0, 0, 1, 0},
-        {0, 0, 0, ALT_ELMNT}
-    }
+const int C_PHASE_SHIFT_BASE_MATRIX[4][4] = {
+    {1, 0, 0, 0},
+    {0, 1, 0, 0},
+    {0, 0, 1, 0},
+    {0, 0, 0, ALT_ELMNT}
 };
 
 int num_qubits;
 int num_states;
 
-/***********************************FUNCTION PROTOTYPES**********************************/
-static void swap_states(Assets *assets);
-static void display_total_state(gsl_vector_complex *state);
-static void operate_matrix(Assets *assets, double scale, gsl_complex alt_element);
+/********** UTILITY FUNCTIONS **********/
 
-/****************************************************************************************/
+static void display_total_state(gsl_vector_complex *state)
+{
+    for (int i = 0; i < num_states; i++) {
+        printf("|");
+        //printf("|%d%d%d> ", GET_BIT(i, 2), GET_BIT(i, 1), GET_BIT(i, 0));
+        for (int b = num_qubits - 1; b >= 0; b--) {
+            printf("%d", GET_BIT(i, b));
+        }
+        printf("> ");
+
+        printf("%.3f\n", gsl_complex_abs(gsl_vector_complex_get(state, i)));
+    }
+
+}
+
+static void display_collapsed_state(gsl_vector_complex *state, int state_num)
+{
+    printf("|");
+    for (int b = num_qubits - 1; b >= 0; b--) {
+        printf("%d", GET_BIT(state_num, b));
+    }
+    printf(">\n");
+}
+
+static void swap_states(Assets *assets)
+{
+    gsl_vector_complex **temp;
+
+    temp = assets->new_state;
+    assets->new_state = assets->current_state;
+    assets->current_state = temp;
+
+    /* Reset comp_matrix. */
+    gsl_spmatrix_int_set_zero(assets->comp_matrix);
+}
+
+static int measure_state(Assets *assets, gsl_rng *rng)
+{
+    double r;
+    double cumulative_prob;
+    int state_num;
+    gsl_complex state_coefficient;
+    double coeff_real;
+    double coeff_imag;
+    gsl_vector_complex *current_state; /* To prevent repeated pointer dereference. */
+
+    current_state = *assets->current_state;
+    cumulative_prob = 0.0;
+    r = gsl_rng_uniform(rng);
+
+    for (state_num = 0; state_num < num_states; state_num++) {
+        state_coefficient = gsl_vector_complex_get(current_state, state_num);
+        coeff_real = GSL_REAL(state_coefficient);
+        coeff_imag = GSL_IMAG(state_coefficient);
+
+        cumulative_prob += (coeff_real*coeff_real) + (coeff_imag*coeff_imag);
+
+        /* The collapsed state is found, the number of which is stored in state_num. */
+        if (cumulative_prob >= r) {
+            break;
+        }
+
+        /* if r = 1.0, this is handled automatically. */
+    }
+
+    /* 
+     * Now, set new state to be the collapsed state.
+     * That is, set the state_num'th state to have a probability of 1.
+     */
+    gsl_vector_complex_set_zero(*assets->new_state);
+    gsl_vector_complex_set(*assets->new_state, state_num, gsl_complex_rect(1.0, 0.0));
+
+    /* As with a gate operation, swap the state pointers. */
+    swap_states(assets);
+
+    return state_num;
+}
+
+/********** QUANTUM GATE FUNCTIONS **********/
 
 static void build_matrix(Assets *assets, Gate gate, int c_qubit_num, int qubit_num)
 {
@@ -213,13 +270,96 @@ static void build_matrix(Assets *assets, Gate gate, int c_qubit_num, int qubit_n
     gsl_spmatrix_int_csc(assets->result_matrix, assets->comp_matrix);
 }
 
-static void c_phase_shift_gate(Assets *assets, int c_qubit_num, int qubit_num, double theta)
+static void build_hadamard_matrix(Assets *assets, int qubit_num)
 {
-    build_matrix(assets, C_PHASE_SHIFT_GATE, c_qubit_num, qubit_num);
+    int not_xor_ij;
+    int element;
+    bool dirac_deltas_non_zero;
 
-    operate_matrix(assets, 1.0, gsl_complex_polar(1.0, theta));
+    int q_address = (num_qubits - 1) - qubit_num;
 
-    swap_states(assets);
+    for (int i = 0; i < num_states; i++) {
+        for (int j = 0; j < num_states; j++) {
+            dirac_deltas_non_zero = true;
+
+            not_xor_ij = ~(i ^ j);
+
+            for (int b = 0; b < num_states; b++) {
+
+                if ( (b != q_address) && (b != c_q_address) ) {
+                    if (GET_BIT(not_xor_ij, b) == 0) {
+                        dirac_deltas_non_zero = false;
+                        break;
+                    }
+                }
+            }
+
+            if (dirac_deltas_non_zero) {
+                element = HADAMARD_BASE_MATRIX[GET_BIT(i, q_address)][GET_BIT(j, q_address)];
+
+                gsl_spmatrix_int_set(assets->comp_matrix, i, j, element);
+            }
+        }
+    }
+
+    gsl_spmatrix_int_csc(assets->result_matrix, assets->comp_matrix);
+}
+
+static void operate_matrix(Assets *assets, double scale, gsl_complex alt_element)
+{
+    gsl_vector_complex *n_state;
+    gsl_vector_complex *c_state;
+    gsl_spmatrix_int *mat;
+    int n_stride;
+    int c_stride;
+    double c_real;
+    double c_imag;
+    double m_real;
+    double m_imag;
+
+    n_state = *assets->new_state;
+    c_state = *assets->current_state;
+    mat = assets->result_matrix;
+
+    n_stride = n_state->stride;
+    c_stride = c_state->stride;
+
+    if (scale == 0.0) {
+        gsl_vector_complex_set_zero(n_state);
+        return;
+    }
+
+    /* Apply scale to current state, as to reduce double multiplications in for loops below. */
+    if (scale != 1.0) {
+        gsl_vector_complex_scale(c_state, gsl_complex_rect(scale, 0.0));
+    }
+
+    gsl_vector_complex_set_zero(n_state);
+
+    for (int j = 0; j < num_states; j++) {
+        for (int p = mat->p[j]; p < mat->p[j + 1]; p++) {
+
+            /* Retrieve matrix element. */
+            m_real = mat->data[p];
+            m_imag = 0.0;
+
+            if ((int) m_real == ALT_ELMNT) {
+                m_real = GSL_REAL(alt_element);
+                m_imag = GSL_IMAG(alt_element);
+            }
+
+            /* Retrieve corresponding element in current_state vector. */
+            c_real = c_state->data[2 * c_stride * j];
+            c_imag = c_state->data[2 * c_stride * j + 1];
+
+            /* Real part. */
+            n_state->data[2 * n_stride * mat->i[p]] += (m_real * c_real) - (m_imag * c_imag);
+
+            /* Imaginary part. */
+            n_state->data[2 * n_stride * mat->i[p] + 1] += (m_real * c_imag) + (m_imag * c_real);
+        }
+    }
+
 }
 
 static void hadamard_gate(Assets *assets, int qubit_num)
@@ -232,12 +372,21 @@ static void hadamard_gate(Assets *assets, int qubit_num)
     swap_states(assets);
 }
 
-/* 
- * This gate is built differently to other gates, so it is built within this function.
- * Therefore, the build_matrix function is not used.
- */
+static void c_phase_shift_gate(Assets *assets, int c_qubit_num, int qubit_num, double theta)
+{
+    build_matrix(assets, C_PHASE_SHIFT_GATE, c_qubit_num, qubit_num);
+
+    operate_matrix(assets, 1.0, gsl_complex_polar(1.0, theta));
+
+    swap_states(assets);
+}
+
 static void c_amodc_gate(Assets *assets, int c_qubit_num, int atox, int C)
 {
+    /* 
+    * This gate is built differently to other gates, so it is built within this function.
+    * Therefore, the build_matrix function is not used.
+    */
     int A; /* Holds a^x (mod C). */
     int M_size;
     int j; /* The column of the matrix in row k in which the 1 resides. */
@@ -307,98 +456,7 @@ static void c_amodc_gate(Assets *assets, int c_qubit_num, int atox, int C)
     swap_states(assets);
 }
 
-static void display_total_state(gsl_vector_complex *state)
-{
-    for (int i = 0; i < num_states; i++) {
-        printf("|");
-        //printf("|%d%d%d> ", GET_BIT(i, 2), GET_BIT(i, 1), GET_BIT(i, 0));
-        for (int b = num_qubits - 1; b >= 0; b--) {
-            printf("%d", GET_BIT(i, b));
-        }
-        printf("> ");
-
-        printf("%.3f\n", gsl_complex_abs(gsl_vector_complex_get(state, i)));
-    }
-
-}
-
-static void display_collapsed_state(gsl_vector_complex *state, int state_num)
-{
-    printf("|");
-    for (int b = num_qubits - 1; b >= 0; b--) {
-        printf("%d", GET_BIT(state_num, b));
-    }
-    printf(">\n");
-}
-
-static void swap_states(Assets *assets)
-{
-    gsl_vector_complex **temp;
-
-    temp = assets->new_state;
-    assets->new_state = assets->current_state;
-    assets->current_state = temp;
-
-    /* Reset comp_matrix. */
-    gsl_spmatrix_int_set_zero(assets->comp_matrix);
-}
-
-static void operate_matrix(Assets *assets, double scale, gsl_complex alt_element)
-{
-    gsl_vector_complex *n_state;
-    gsl_vector_complex *c_state;
-    gsl_spmatrix_int *mat;
-    int n_stride;
-    int c_stride;
-    double c_real;
-    double c_imag;
-    double m_real;
-    double m_imag;
-
-    n_state = *assets->new_state;
-    c_state = *assets->current_state;
-    mat = assets->result_matrix;
-
-    n_stride = n_state->stride;
-    c_stride = c_state->stride;
-
-    if (scale == 0.0) {
-        gsl_vector_complex_set_zero(n_state);
-        return;
-    }
-
-    /* Apply scale to current state, as to reduce double multiplications in for loops below. */
-    if (scale != 1.0) {
-        gsl_vector_complex_scale(c_state, gsl_complex_rect(scale, 0.0));
-    }
-
-    gsl_vector_complex_set_zero(n_state);
-
-    for (int j = 0; j < num_states; j++) {
-        for (int p = mat->p[j]; p < mat->p[j + 1]; p++) {
-
-            /* Retrieve matrix element. */
-            m_real = mat->data[p];
-            m_imag = 0.0;
-
-            if ((int) m_real == ALT_ELMNT) {
-                m_real = GSL_REAL(alt_element);
-                m_imag = GSL_IMAG(alt_element);
-            }
-
-            /* Retrieve corresponding element in current_state vector. */
-            c_real = c_state->data[2 * c_stride * j];
-            c_imag = c_state->data[2 * c_stride * j + 1];
-
-            /* Real part. */
-            n_state->data[2 * n_stride * mat->i[p]] += (m_real * c_real) - (m_imag * c_imag);
-
-            /* Imaginary part. */
-            n_state->data[2 * n_stride * mat->i[p] + 1] += (m_real * c_imag) + (m_imag * c_real);
-        }
-    }
-
-}
+/********** SHOR'S ALGORITHM FUNCTIONS **********/
 
 static int greatest_common_divisor(int a, int b)
 {
@@ -433,48 +491,6 @@ static bool is_power(int small_int, int C)
     } else {
         return false;
     }
-}
-
-static int measure_state(Assets *assets, gsl_rng *rng)
-{
-    double r;
-    double cumulative_prob;
-    int state_num;
-    gsl_complex state_coefficient;
-    double coeff_real;
-    double coeff_imag;
-    gsl_vector_complex *current_state; /* To prevent repeated pointer dereference. */
-
-    current_state = *assets->current_state;
-    cumulative_prob = 0.0;
-    r = gsl_rng_uniform(rng);
-
-    for (state_num = 0; state_num < num_states; state_num++) {
-        state_coefficient = gsl_vector_complex_get(current_state, state_num);
-        coeff_real = GSL_REAL(state_coefficient);
-        coeff_imag = GSL_IMAG(state_coefficient);
-
-        cumulative_prob += (coeff_real*coeff_real) + (coeff_imag*coeff_imag);
-
-        /* The collapsed state is found, the number of which is stored in state_num. */
-        if (cumulative_prob >= r) {
-            break;
-        }
-
-        /* if r = 1.0, this is handled automatically. */
-    }
-
-    /* 
-     * Now, set new state to be the collapsed state.
-     * That is, set the state_num'th state to have a probability of 1.
-     */
-    gsl_vector_complex_set_zero(*assets->new_state);
-    gsl_vector_complex_set(*assets->new_state, state_num, gsl_complex_rect(1.0, 0.0));
-
-    /* As with a gate operation, swap the state pointers. */
-    swap_states(assets);
-
-    return state_num;
 }
 
 static int find_period(Assets *assets, gsl_rng *rng, int a, int C)
@@ -555,6 +571,14 @@ static ErrorCode shors_algorithm(Assets *assets, int factors[2], int C)
 
         break;
     }
+
+    return NO_ERROR;
+}
+
+/*********** SETUP FUNCTIONS **********/
+
+static ErrorCode parse_command_line_args(void)
+{
 
     return NO_ERROR;
 }
