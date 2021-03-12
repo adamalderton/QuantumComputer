@@ -51,7 +51,7 @@
 #define NO_CONDITIONAL_QUBIT -1
 
 #define LOW_POWER_TOLERANCE 5
-#define ALT_ELMNT -INT_MAX
+#define NON_INT_ELEMENT -INT_MAX
 
 #define L 0
 #define M 1
@@ -139,11 +139,11 @@ const int C_PHASE_SHIFT_BASE_MATRIX[4][4] = {
     {1, 0, 0, 0},
     {0, 1, 0, 0},
     {0, 0, 1, 0},
-    {0, 0, 0, ALT_ELMNT}
+    {0, 0, 0, NON_INT_ELEMENT}
 };
 
-int num_qubits;
-int num_states;
+const int num_qubits;
+const int num_states;
 
 /********** UTILITY FUNCTIONS **********/
 
@@ -227,84 +227,6 @@ static int measure_state(Assets *assets, gsl_rng *rng)
 
 /********** QUANTUM GATE FUNCTIONS **********/
 
-static void build_matrix(Assets *assets, Gate gate, int c_qubit_num, int qubit_num)
-{
-    int not_xor_ij;
-    int element;
-    bool dirac_deltas_non_zero;
-
-    int c_q_address = (num_qubits - 1) - c_qubit_num;
-    int q_address = (num_qubits - 1) - qubit_num;
-
-    for (int i = 0; i < num_states; i++) {
-        for (int j = 0; j < num_states; j++) {
-            dirac_deltas_non_zero = true;
-
-            not_xor_ij = ~(i ^ j);
-
-            for (int b = 0; b < num_states; b++) {
-
-                if ( (b != q_address) && (b != c_q_address) ) {
-                    if (GET_BIT(not_xor_ij, b) == 0) {
-                        dirac_deltas_non_zero = false;
-                        break;
-                    }
-                }
-            }
-
-            if (dirac_deltas_non_zero) {
-
-                if (gate.type == HADAMARD_GATE_TYPE) {
-                    element = gate.base[GET_BIT(i, q_address)][GET_BIT(j, q_address)];
-                } else {
-                    element = gate.base
-                        [(2*GET_BIT(i, c_q_address)) + GET_BIT(i, q_address)]
-                        [(2*GET_BIT(j, c_q_address)) + GET_BIT(j, q_address)];
-                }
-
-                gsl_spmatrix_int_set(assets->comp_matrix, i, j, element);
-            }
-        }
-    }
-
-    gsl_spmatrix_int_csc(assets->result_matrix, assets->comp_matrix);
-}
-
-static void build_hadamard_matrix(Assets *assets, int qubit_num)
-{
-    int not_xor_ij;
-    int element;
-    bool dirac_deltas_non_zero;
-
-    int q_address = (num_qubits - 1) - qubit_num;
-
-    for (int i = 0; i < num_states; i++) {
-        for (int j = 0; j < num_states; j++) {
-            dirac_deltas_non_zero = true;
-
-            not_xor_ij = ~(i ^ j);
-
-            for (int b = 0; b < num_states; b++) {
-
-                if ( (b != q_address) && (b != c_q_address) ) {
-                    if (GET_BIT(not_xor_ij, b) == 0) {
-                        dirac_deltas_non_zero = false;
-                        break;
-                    }
-                }
-            }
-
-            if (dirac_deltas_non_zero) {
-                element = HADAMARD_BASE_MATRIX[GET_BIT(i, q_address)][GET_BIT(j, q_address)];
-
-                gsl_spmatrix_int_set(assets->comp_matrix, i, j, element);
-            }
-        }
-    }
-
-    gsl_spmatrix_int_csc(assets->result_matrix, assets->comp_matrix);
-}
-
 static void operate_matrix(Assets *assets, double scale, gsl_complex alt_element)
 {
     gsl_vector_complex *n_state;
@@ -343,7 +265,7 @@ static void operate_matrix(Assets *assets, double scale, gsl_complex alt_element
             m_real = mat->data[p];
             m_imag = 0.0;
 
-            if ((int) m_real == ALT_ELMNT) {
+            if ((int) m_real == NON_INT_ELEMENT) {
                 m_real = GSL_REAL(alt_element);
                 m_imag = GSL_IMAG(alt_element);
             }
@@ -360,28 +282,84 @@ static void operate_matrix(Assets *assets, double scale, gsl_complex alt_element
         }
     }
 
-}
-
-static void hadamard_gate(Assets *assets, int qubit_num)
-{
-
-    build_matrix(assets, HADAMARD_GATE, NO_CONDITIONAL_QUBIT, qubit_num);
-
-    operate_matrix(assets, HADAMARD_SCALE, NULL_ALT_ELEMENT);
-
     swap_states(assets);
 }
 
-static void c_phase_shift_gate(Assets *assets, int c_qubit_num, int qubit_num, double theta)
+static void build_hadamard_matrix(Assets *assets, int qubit_num)
 {
-    build_matrix(assets, C_PHASE_SHIFT_GATE, c_qubit_num, qubit_num);
+    int not_xor_ij;
+    int element;
+    bool dirac_deltas_non_zero;
 
-    operate_matrix(assets, 1.0, gsl_complex_polar(1.0, theta));
+    int q_address = (num_qubits - 1) - qubit_num;
 
-    swap_states(assets);
+    for (int i = 0; i < num_states; i++) {
+        for (int j = 0; j < num_states; j++) {
+            dirac_deltas_non_zero = true;
+
+            not_xor_ij = ~(i ^ j);
+
+            for (int b = 0; b < num_states; b++) {
+
+                if (b != q_address) {
+                    if (GET_BIT(not_xor_ij, b) == 0) {
+                        dirac_deltas_non_zero = false;
+                        break;
+                    }
+                }
+            }
+
+            if (dirac_deltas_non_zero) {
+                element = HADAMARD_BASE_MATRIX[GET_BIT(i, q_address)][GET_BIT(j, q_address)];
+
+                gsl_spmatrix_int_set(assets->comp_matrix, i, j, element);
+            }
+        }
+    }
+
+    gsl_spmatrix_int_csc(assets->result_matrix, assets->comp_matrix);
 }
 
-static void c_amodc_gate(Assets *assets, int c_qubit_num, int atox, int C)
+static void build_c_phase_matrix(Assets *assets, int c_qubit_num, int qubit_num)
+{
+    int not_xor_ij;
+    int element;
+    bool dirac_deltas_non_zero;
+
+    int c_q_address = (num_qubits - 1) - c_qubit_num;
+    int q_address = (num_qubits - 1) - qubit_num;
+
+    for (int i = 0; i < num_states; i++) {
+        for (int j = 0; j < num_states; j++) {
+            dirac_deltas_non_zero = true;
+
+            not_xor_ij = ~(i ^ j);
+
+            for (int b = 0; b < num_states; b++) {
+
+                if ( (b != q_address) && (b != c_q_address) ) {
+                    if (GET_BIT(not_xor_ij, b) == 0) {
+                        dirac_deltas_non_zero = false;
+                        break;
+                    }
+                }
+            }
+
+            if (dirac_deltas_non_zero) {
+
+                element = C_PHASE_SHIFT_BASE_MATRIX
+                    [(2*GET_BIT(i, c_q_address)) + GET_BIT(i, q_address)]
+                    [(2*GET_BIT(j, c_q_address)) + GET_BIT(j, q_address)];
+
+                gsl_spmatrix_int_set(assets->comp_matrix, i, j, element);
+            }
+        }
+    }
+
+    gsl_spmatrix_int_csc(assets->result_matrix, assets->comp_matrix);
+}
+
+static void build_c_amodc_matrix(Assets *assets, int c_qubit_num, int atox, int C)
 {
     /* 
     * This gate is built differently to other gates, so it is built within this function.
@@ -449,11 +427,27 @@ static void c_amodc_gate(Assets *assets, int c_qubit_num, int atox, int C)
 
     /* Finally, compress the matrix stored in comp_matrix into result_matrix. */
     gsl_spmatrix_int_csc(assets->result_matrix, assets->comp_matrix);
+}
 
-    /* Now the matrix has been built, operate it as with any other gate. */
+static void hadamard_gate(Assets *assets, int qubit_num)
+{
+    build_hadamard_matrix(assets, qubit_num);
+
+    operate_matrix(assets, HADAMARD_SCALE, NULL_ALT_ELEMENT);
+}
+
+static void c_phase_shift_gate(Assets *assets, int c_qubit_num, int qubit_num, double theta)
+{
+    build_c_phase_matrix(assets, c_qubit_num, qubit_num);
+
+    operate_matrix(assets, 1.0, gsl_complex_polar(1.0, theta));
+}
+
+static void c_amodc_gate(Assets *assets, int c_qubit_num, int atox, int C)
+{
+    build_c_amodc_matrix(assets, c_qubit_num, atox, C);
+
     operate_matrix(assets, 1.0, NULL_ALT_ELEMENT);
-
-    swap_states(assets);
 }
 
 /********** SHOR'S ALGORITHM FUNCTIONS **********/
