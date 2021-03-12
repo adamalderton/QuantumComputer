@@ -38,6 +38,7 @@
 #include <gsl/gsl_vector.h>
 #include <gsl/gsl_spmatrix.h>
 #include <gsl/gsl_spblas.h>
+#include <gsl/gsl_rng.h>
 
 #define VERSION "1.0.0"
 #define REVISION_DATE "04/02/2021"
@@ -51,6 +52,9 @@
 
 #define LOW_POWER_TOLERANCE 5
 #define ALT_ELMNT -INT_MAX
+
+#define L 0
+#define M 1
 
 /* 
  * Many functions below return an errorcode. This macro is called after these functions return
@@ -161,7 +165,7 @@ int num_states;
 
 /***********************************FUNCTION PROTOTYPES**********************************/
 static void swap_states(Assets *assets);
-static void display_state(gsl_vector_complex *state);
+static void display_total_state(gsl_vector_complex *state);
 static void operate_matrix(Assets *assets, double scale, gsl_complex alt_element);
 
 /****************************************************************************************/
@@ -240,7 +244,7 @@ static void c_amodc_gate(Assets *assets, int c_qubit_num, int atox, int C)
     int f; /* Used in the calculation of the permutation matrix. */
 
     A = atox % C;
-    M_size = assets->register_size[1];
+    M_size = assets->register_size[M];
 
     /* Using notation from instruction document, loop over rows (k) of matrix. */
     for (int k = 0; k < num_states; k++) {
@@ -303,7 +307,7 @@ static void c_amodc_gate(Assets *assets, int c_qubit_num, int atox, int C)
     swap_states(assets);
 }
 
-static void display_state(gsl_vector_complex *state)
+static void display_total_state(gsl_vector_complex *state)
 {
     for (int i = 0; i < num_states; i++) {
         printf("|");
@@ -316,6 +320,15 @@ static void display_state(gsl_vector_complex *state)
         printf("%.3f\n", gsl_complex_abs(gsl_vector_complex_get(state, i)));
     }
 
+}
+
+static void display_collapsed_state(gsl_vector_complex *state, int state_num)
+{
+    printf("|");
+    for (int b = num_qubits - 1; b >= 0; b--) {
+        printf("%d", GET_BIT(state_num, b));
+    }
+    printf(">\n");
 }
 
 static void swap_states(Assets *assets)
@@ -422,33 +435,90 @@ static bool is_power(int small_int, int C)
     }
 }
 
-static int find_period(Assets *assets, int a, int C, int L, int M)
+static int measure_state(Assets *assets, gsl_rng *rng)
 {
-    int period;
+    double r;
+    double cumulative_prob;
+    int state_num;
+    gsl_complex state_coefficient;
+    double coeff_real;
+    double coeff_imag;
+    gsl_vector_complex *current_state; /* To prevent repeated pointer dereference. */
 
-    /* Apply Hadamard gate to qubits in the L register. */
-    for (int i = 0; i < L; i++) {
-        hadamard_gate(assets, i);
+    current_state = *assets->current_state;
+    cumulative_prob = 0.0;
+    r = gsl_rng_uniform(rng);
+
+    for (state_num = 0; state_num < num_states; state_num++) {
+        state_coefficient = gsl_vector_complex_get(current_state, state_num);
+        coeff_real = GSL_REAL(state_coefficient);
+        coeff_imag = GSL_IMAG(state_coefficient);
+
+        cumulative_prob += (coeff_real*coeff_real) + (coeff_imag*coeff_imag);
+
+        /* The collapsed state is found, the number of which is stored in state_num. */
+        if (cumulative_prob >= r) {
+            break;
+        }
+
+        /* if r = 1.0, this is handled automatically. */
     }
 
     /* 
-     * Apply conditional a^x (mod C) gate to M register. 
-     * Here, x is the power of 2 corresponding to the qubit
+     * Now, set new state to be the collapsed state.
+     * That is, set the state_num'th state to have a probability of 1.
      */
-    for (int l = 0; l < L; l++) {
-        for (int m = L; m < num_qubits; m++) {
-            //c_amodc_gate(assets,);
-            1 == 1;
-        }
-    }
+    gsl_vector_complex_set_zero(*assets->new_state);
+    gsl_vector_complex_set(*assets->new_state, state_num, gsl_complex_rect(1.0, 0.0));
+
+    /* As with a gate operation, swap the state pointers. */
+    swap_states(assets);
+
+    return state_num;
+}
+
+static int find_period(Assets *assets, gsl_rng *rng, int a, int C)
+{
+    int period = 69;
+    int L_size;
+    int M_size;
+    int x;
+
+    L_size = assets->register_size[L];
+    M_size = assets->register_size[M];
+
+    /* Apply Hadamard gate to qubits in the L register. */
+    // for (int l = (num_qubits - L_size); l < num_qubits; l++) {
+    //     hadamard_gate(assets, l);
+    // }
+    int l = 4;
+    hadamard_gate(assets, l);
+
+    display_total_state(*assets->current_state);
+
+    // /* For each bit value in the L register, apply the conditional a^x (mod C) gate. */
+    // x = 0;
+    // for (int l = (num_qubits - L_size); l < num_qubits; l++) {
+    //     c_amodc_gate(assets, l, INT_POW(a, x), C);
+    //     x++;
+    // }
+
+    // int state_num = measure_state(assets, rng);
+
+    // display_collapsed_state(*assets->current_state, state_num);
 
     /* Inverse quantum Fourier transform (7 qubits only). */
-
+    // hadamard_gate(assets, 7);
+    // c_phase_shift_gate(assets, 6, 5, M_PI_2);
+    // c_phase_shift_gate(assets, 6, 4, M_PI_4);
+    // hadamard_gate(assets, 5);
+    // c_phase_shift_gate(assets, 5, 4, M_PI_2);
+    // hadamard_gate(assets, 4);
 
     return period;
 }
 
-static ErrorCode shors_algorithm(Assets *assets, int factors[2], int C, int L, int M)
+static ErrorCode shors_algorithm(Assets *assets, int factors[2], int C)
 {
     int period;
     int gcd;
@@ -472,7 +542,7 @@ static ErrorCode shors_algorithm(Assets *assets, int factors[2], int C, int L, i
             return NO_ERROR;
         }
 
-        period = find_period(assets, trial_int, C, L, M);
+        //period = find_period(assets, trial_int, C);
 
         if ( (period % 2 == 0) && ( (INT_POW(trial_int, period / 2) + 1) % C == 0 ) ) {
             continue;
@@ -494,14 +564,19 @@ int main(int argc, char *argv[])
     ErrorCode error;
     Assets assets;
     int factors[2];
+    const gsl_rng_type *rng_type;
+    gsl_rng *rng;
 
     // parse_command_line_args(argc, char *argv[]);
-    
+
+    rng_type = gsl_rng_mt19937;
+    rng = gsl_rng_alloc(rng_type);
+
     num_qubits = 7;
     num_states = INT_POW(2, num_qubits);
 
-    assets.register_size[0] = 3; /* L register. */
-    assets.register_size[1] = 4; /* M register. */
+    assets.register_size[L] = 3; /* L register. */
+    assets.register_size[M] = 4; /* M register. */
 
     assets.state_a = gsl_vector_complex_alloc(num_states);
     assets.state_b = gsl_vector_complex_alloc(num_states);
@@ -517,12 +592,17 @@ int main(int argc, char *argv[])
 
     //error = shors_algorithm(&assets, factors, 15, 3, 4);
     //ERROR_CHECK(error);
+    
+    find_period(&assets, rng, 7, 15);
 
     gsl_vector_complex_free(assets.state_a);
     gsl_vector_complex_free(assets.state_b);
     gsl_spmatrix_int_free(assets.result_matrix);
     gsl_spmatrix_int_free(assets.comp_matrix);
+    gsl_rng_free(rng);
 
+    factors[0] = 0;
+    factors[1] = 1;
     fprintf(stdout, "Factors: (%d, %d)\n", factors[0], factors[1]);
 
     return NO_ERROR;
