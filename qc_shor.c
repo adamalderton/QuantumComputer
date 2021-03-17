@@ -51,9 +51,13 @@
 #define HADAMARD_SCALE 1.0/M_SQRT2
 #define NULL_ALT_ELEMENT gsl_complex_rect(0.0, 0.0)
 #define NO_CONDITIONAL_QUBIT -1
-
-#define LOW_POWER_TOLERANCE 5
 #define NON_INT_ELEMENT -INT_MAX
+
+/* Tweakable parameters. */
+#define LOW_POWER_TOLERANCE 5
+#define NUM_CONTINUED_FRACTIONS 7
+#define TRIALS_PER_DENOMINATOR 5
+
 
 #define L 0
 #define M 1
@@ -156,11 +160,14 @@ int num_states;
 
 /********** UTILITY FUNCTIONS **********/
 
-static void display_state(gsl_vector_complex *state)
+static void display_state(Assets *assets)
 {
+    gsl_vector_complex *state;
     double prob;
     int x;
     int fx;
+
+    state = *assets->current_state;
 
     for (int i = 0; i < num_states; i++) {
 
@@ -187,7 +194,7 @@ static void display_state(gsl_vector_complex *state)
             fx += GET_BIT(i, 2) << 2;
             fx += GET_BIT(i, 3) << 3;
 
-            printf("x = %d, f(x) = %d, Correct f(x) = %d\n", x, fx, INT_POW(7, x) % 15);
+            printf("x = %d, f(x) = %d", x, fx);
         }
     }
 }
@@ -245,6 +252,14 @@ static void check_norm(gsl_vector_complex *state)
     }
 
     printf("%.4f\n", sum);
+}
+
+static void reset_register(gsl_vector_complex *current_state)
+{
+    gsl_vector_complex_set_zero(current_state);
+
+    /* Sets register to |000 ... 001>. */
+    gsl_vector_complex_set(current_state, 1, gsl_complex_polar(1.0, 0.0));
 }
 
 /********** QUANTUM GATE FUNCTIONS **********/
@@ -486,7 +501,84 @@ static void c_not_gate(Assets *assets, int c_qubit_num, int qubit_num)
     operate_matrix(assets, 1.0, NULL_ALT_ELEMENT);
 }
 
+static void quantum_computation(Assets *assets, int a, int C)
+{
+    int L_size;
+    int x;
+
+    L_size = assets->register_size[L];
+
+    /* Apply Hadamard gate to qubits in the L register. */
+    for (int l = (num_qubits - L_size); l < num_qubits; l++) {
+        hadamard_gate(assets, l);
+    }
+
+    /* For each bit value in the L register, apply the conditional a^x (mod C) gate. */
+    x = 1;
+    for (int l = (num_qubits - L_size); l < num_qubits; l++) {
+        c_amodc_gate(assets, l, INT_POW(a, x), C);
+        x *= 2;
+    }
+
+    /* Inverse quantum Fourier transform (7 qubits only). */
+    hadamard_gate(assets, 6);
+    c_phase_shift_gate(assets, 6, 5, M_PI_2);
+    c_phase_shift_gate(assets, 6, 4, M_PI_4);
+    hadamard_gate(assets, 5);
+    c_phase_shift_gate(assets, 5, 4, M_PI_2);
+    hadamard_gate(assets, 4);
+}
+
 /********** SHOR'S ALGORITHM FUNCTIONS **********/
+
+static void get_continued_fractions_denominators(double omega, int num_fractions, int *denominators)
+{
+    double omega_inv;
+    int numerator;
+    int denominator;
+    int temp;
+    int *coeffs;
+
+    coeffs = (int *) malloc(num_fractions * sizeof(int));
+    // CHECK_ALLOC();
+
+    for (int i = 0; i < num_fractions; i++) {
+        omega_inv = 1.0 / omega;
+
+        /* Omega for next loop iteration, which is fractional part of omega_inv. */
+        omega = omega_inv - (double) ( (int) omega_inv );
+
+        /* Coefficient calculation uses next omega value. */
+        coeffs[i] = (int) (omega_inv - omega);
+
+        /*
+         * With the coefficient array built, use it (in reverse order) to build the
+         * numerator and denominator of the continued fraction approximation.
+         */
+        denominator = 1;
+        numerator = 0;
+        for (int coeff_num = i - 1; coeff_num >= 0; coeff_num--) {
+            temp = denominator;
+            denominator = numerator + (denominator * coeffs[coeff_num]);
+            numerator = temp;
+        }
+
+        denominators[i] = denominator;
+    }
+
+    free(coeffs);
+}
+
+static double read_omega(gsl_vector_complex *current_state, int L_size, int state_num)
+{
+    int x_tilde;
+
+    x_tilde += GET_BIT(state_num, 6) << 0;
+    x_tilde += GET_BIT(state_num, 5) << 1;
+    x_tilde += GET_BIT(state_num, 4) << 2;
+
+    return (double) x_tilde / (double) INT_POW(2, L_size);
+}
 
 static int greatest_common_divisor(int a, int b)
 {
@@ -525,48 +617,47 @@ static bool is_power(int small_int, int C)
 
 static int find_period(Assets *assets, gsl_rng *rng, int a, int C)
 {
-    int period = 69;
-    int L_size;
-    int x;
+    int *denominators;
+    int period;
+    bool period_found;
+    int measured_state_num;
+    double omega;
 
-    L_size = assets->register_size[L];
+    reset_register(*assets->current_state);
+    quantum_computation(assets, a, C);
 
-    /* Apply Hadamard gate to qubits in the L register. */
-    for (int l = (num_qubits - L_size); l < num_qubits; l++) {
-        hadamard_gate(assets, l);
+    measured_state_num = measure_state(assets, rng);
+    omega = read_omega(*assets->current_state, assets->register_size[L], measured_state_num);
+
+    denominators = (int *) malloc(NUM_CONTINUED_FRACTIONS * sizeof(int));
+    get_continued_fractions_denominators(omega, NUM_CONTINUED_FRACTIONS, denominators);
+
+    /* With denominators found, trial multiples of them until the period is found. */
+    for (int d = 0; d < NUM_CONTINUED_FRACTIONS; d++) {    /* d => denominator. */
+        for (int m = 1; m < TRIALS_PER_DENOMINATOR + 1; m++) { /* m => multiple. */
+            period = m * denominators[d];
+
+            if (INT_POW(a, period) % C == 1 ) {
+                period_found = true;
+                break;
+            }
+        }
+
+        if (period_found) {
+            break;
+        }
     }
 
-    /* For each bit value in the L register, apply the conditional a^x (mod C) gate. */
-    x = 1;
-    for (int l = (num_qubits - L_size); l < num_qubits; l++) {
-        c_amodc_gate(assets, l, INT_POW(a, x), C);
-        x *= 2;
+    free(denominators);
+
+    if (!period_found) {
+        period = 0;
     }
-
-    // c_amodc_gate(assets, 4, a, C);
-    // display_state(*assets->current_state);
-    // printf("-----AFTER A0------\n");
-
-    // c_amodc_gate(assets, 5, a*a, C);
-    // display_state(*assets->current_state);
-    // printf("-----AFTER A1------\n");
-
-    // c_amodc_gate(assets, 6, a*a*a*a, C);
-    // display_state(*assets->current_state);
-    // printf("-----AFTER A2------\n");
-
-    /* Inverse quantum Fourier transform (7 qubits only). */
-    // hadamard_gate(assets, 6);
-    // c_phase_shift_gate(assets, 6, 5, M_PI_2);
-    // c_phase_shift_gate(assets, 6, 4, M_PI_4);
-    // hadamard_gate(assets, 5);
-    // c_phase_shift_gate(assets, 5, 4, M_PI_2);
-    // hadamard_gate(assets, 4);
 
     return period;
 }
 
-static ErrorCode shors_algorithm(Assets *assets, int factors[2], int C)
+static ErrorCode shors_algorithm(Assets *assets, gsl_rng *rng, int factors[2], int C)
 {
     int period;
     int gcd;
@@ -579,7 +670,8 @@ static ErrorCode shors_algorithm(Assets *assets, int factors[2], int C)
         }
     }
 
-    for (int trial_int = LOW_POWER_TOLERANCE; trial_int < C; trial_int++) {
+     for (int trial_int = LOW_POWER_TOLERANCE; trial_int < C; trial_int++) {
+    //for (int trial_int = 14; trial_int < C; trial_int++) {
         
         gcd = greatest_common_divisor(trial_int, C);
 
@@ -590,17 +682,16 @@ static ErrorCode shors_algorithm(Assets *assets, int factors[2], int C)
             return NO_ERROR;
         }
 
-        //period = find_period(assets, trial_int, C);
+        period = find_period(assets, rng, trial_int, C);
 
-        if ( (period % 2 == 0) && ( (INT_POW(trial_int, period / 2) + 1) % C == 0 ) ) {
+        if (period % 2 != 0) {
             continue;
-        } else {
+        } else if (INT_POW(trial_int, period / 2) % 15 == -1) {
             continue;
         }
 
         factors[0] = greatest_common_divisor(INT_POW(trial_int, period / 2) + 1, C);
         factors[1] = greatest_common_divisor(INT_POW(trial_int, period / 2) - 1, C);
-
         break;
     }
 
@@ -617,6 +708,7 @@ static ErrorCode parse_command_line_args(int argc, char *argv[])
 
 int main(int argc, char *argv[])
 {
+    ErrorCode error;
     Assets assets;
     int factors[2];
     const gsl_rng_type *rng_type;
@@ -644,24 +736,14 @@ int main(int argc, char *argv[])
     assets.current_state = &assets.state_a;
     assets.new_state = &assets.state_b;
 
-    /* Move me into shors algorithm. */
-    gsl_vector_complex_set_zero(*assets.current_state);
-    gsl_vector_complex_set(*assets.current_state, 1, gsl_complex_polar(1.0, 0.0));
-
-    factors[0] = find_period(&assets, rng, 7, 15);
-    display_state(*assets.current_state);
-
-    //error = shors_algorithm(&assets, factors, 15, 3, 4);
-    //ERROR_CHECK(error);
+    error = shors_algorithm(&assets, rng, factors, 15);
+    ERROR_CHECK(error);
 
     gsl_vector_complex_free(assets.state_a);
     gsl_vector_complex_free(assets.state_b);
     gsl_spmatrix_int_free(assets.result_matrix);
     gsl_spmatrix_int_free(assets.comp_matrix);
     gsl_rng_free(rng);
-
-    factors[0] = 0;
-    factors[1] = 1;
 
     fprintf(stdout, "Factors: (%d, %d)\n", factors[0], factors[1]);
 
