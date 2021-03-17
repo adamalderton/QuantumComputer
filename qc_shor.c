@@ -54,7 +54,7 @@
 #define NON_INT_ELEMENT -INT_MAX
 
 /* Tweakable parameters. */
-#define LOW_POWER_TOLERANCE 5
+#define SMALL_POWER_TOLERANCE 5
 #define NUM_CONTINUED_FRACTIONS 7
 #define TRIALS_PER_DENOMINATOR 5
 
@@ -139,13 +139,6 @@ typedef struct {
 const int HADAMARD_BASE_MATRIX[2][2] = {
     {1, 1},
     {1, -1}
-};
-
-const int C_NOT_BASE_MATRIX[4][4] = {
-    {1, 0, 0, 0},
-    {0, 1, 0, 0},
-    {0, 0, 0, 1},
-    {0, 0, 1, 0}
 };
 
 const int C_PHASE_SHIFT_BASE_MATRIX[4][4] = {
@@ -463,44 +456,6 @@ static void c_amodc_gate(Assets *assets, int c_qubit_num, int atox, int C)
     operate_matrix(assets, 1.0, NULL_ALT_ELEMENT);
 }
 
-static void c_not_gate(Assets *assets, int c_qubit_num, int qubit_num)
-{
-    int not_xor_ij;
-    int element;
-    bool dirac_deltas_non_zero;
-
-    for (int i = 0; i < num_states; i++) {
-        for (int j = 0; j < num_states; j++) {
-            dirac_deltas_non_zero = true;
-
-            not_xor_ij = ~(i ^ j);
-
-            for (int b = 0; b < num_qubits; b++) {
-
-                if ( (b != qubit_num) && (b != c_qubit_num) ) {
-                    if (GET_BIT(not_xor_ij, b) == 0) {
-                        dirac_deltas_non_zero = false;
-                        break;
-                    }
-                }
-            }
-
-            if (dirac_deltas_non_zero) {
-
-                element = C_NOT_BASE_MATRIX
-                    [(2*GET_BIT(i, c_qubit_num)) + GET_BIT(i, qubit_num)]
-                    [(2*GET_BIT(j, c_qubit_num)) + GET_BIT(j, qubit_num)];
-
-                gsl_spmatrix_int_set(assets->comp_matrix, i, j, element);
-            }
-        }
-    }
-
-    gsl_spmatrix_int_csc(assets->result_matrix, assets->comp_matrix);
-
-    operate_matrix(assets, 1.0, NULL_ALT_ELEMENT);
-}
-
 static void quantum_computation(Assets *assets, int a, int C)
 {
     int L_size;
@@ -662,7 +617,7 @@ static ErrorCode shors_algorithm(Assets *assets, gsl_rng *rng, int factors[2], i
     int period;
     int gcd;
 
-    for (int i = 2; i < LOW_POWER_TOLERANCE; i++) {
+    for (int i = 2; i < SMALL_POWER_TOLERANCE; i++) {
         if (is_power(i, C)) {
             factors[0] = i;
             factors[1] = C / i;
@@ -670,7 +625,7 @@ static ErrorCode shors_algorithm(Assets *assets, gsl_rng *rng, int factors[2], i
         }
     }
 
-     for (int trial_int = LOW_POWER_TOLERANCE; trial_int < C; trial_int++) {
+     for (int trial_int = SMALL_POWER_TOLERANCE; trial_int < C; trial_int++) {
     //for (int trial_int = 14; trial_int < C; trial_int++) {
         
         gcd = greatest_common_divisor(trial_int, C);
@@ -702,6 +657,13 @@ static ErrorCode shors_algorithm(Assets *assets, gsl_rng *rng, int factors[2], i
 
 static ErrorCode parse_command_line_args(int argc, char *argv[])
 {
+    /* Todo:
+        - take continued fraction parameters (current #define d)
+        - take C
+        - num qubits (cannot be larger than bits in unsigned long long int)
+        - register sizes
+        - warning if registers are too small to be confident about finding a factor
+    */
 
     return NO_ERROR;
 }
