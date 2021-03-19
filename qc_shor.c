@@ -30,6 +30,7 @@
 
 #include <stdlib.h>
 #include <stdio.h>
+#include <unistd.h>
 #include <stdbool.h>
 #include <time.h>
 
@@ -112,10 +113,8 @@
 /* Enum to store the various error codes than can be returned within this program. */
 typedef enum {
     NO_ERROR = 0,
-    GSL_ERROR,
     BAD_ARGUMENTS,
     BAD_FILENAME,
-    BAD_FILE,
     UNKNOWN_ERROR,
 } ErrorCode;
 
@@ -695,7 +694,42 @@ static ErrorCode parse_command_line_args(int argc, char *argv[])
         - num qubits (cannot be larger than bits in unsigned long long int)
         - register sizes
         - warning if registers are too small to be confident about finding a factor
+        - verbose options
+        - force quantum option
     */
+
+    extern char *optarg;
+    extern int optind;
+    int arg;
+
+    int C, L_, M_;
+    bool verbose;
+
+    while ((arg = getopt(argc, argv, "C:L:M:v")) != -1) {
+        switch(arg) {
+            case 'C':
+                C = atoi(optarg);
+                break;
+            
+            case 'L':
+                L_ = atoi(optarg);
+                break;
+            
+            case 'M':
+                M_ = atoi(optarg);
+                break;
+            
+            case 'v':
+                verbose = true;
+                break;
+            
+            case '?':
+                fprintf(stdout, "Usage: ./qc_shor.exe -C num -L L_reg_size -M M_reg_size [-v (verbose)]\n");
+                return BAD_ARGUMENTS;
+        }
+    }
+
+    printf("C: %d, L: %d, M: %d, v: %d\n", C, L_, M_, verbose);
 
     return NO_ERROR;
 }
@@ -708,7 +742,7 @@ int main(int argc, char *argv[])
     const gsl_rng_type *rng_type;
     gsl_rng *rng;
 
-    // parse_command_line_args(argc, argv);
+    parse_command_line_args(argc, argv);
 
     rng_type = gsl_rng_mt19937;
     rng = gsl_rng_alloc(rng_type);
@@ -730,10 +764,8 @@ int main(int argc, char *argv[])
     assets.current_state = &assets.state_a;
     assets.new_state = &assets.state_b;
 
-    read_omega(*assets.current_state, assets.register_size[L], assets.register_size[M], 3);
-
-    error = shors_algorithm(&assets, rng, factors, 21);
-    ERROR_CHECK(error);
+    //error = shors_algorithm(&assets, rng, factors, 21);
+    //ERROR_CHECK(error);
 
     gsl_vector_complex_free(assets.state_a);
     gsl_vector_complex_free(assets.state_b);
