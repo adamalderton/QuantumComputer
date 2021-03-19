@@ -105,7 +105,7 @@
     ( (int) (pow(base, power) + 0.5) )
 
 #define NON_ZERO_ESTIMATE(num_qubits) \
-    ( num_qubits*num_qubits )
+    ( 2 * num_qubits )
 
 /***********************************TYPEDEFS AND GLOBALS*********************************/
 
@@ -456,6 +456,25 @@ static void c_amodc_gate(Assets *assets, int c_qubit_num, int atox, int C)
     operate_matrix(assets, 1.0, NULL_ALT_ELEMENT);
 }
 
+static void inverse_QFT(Assets *assets, int L_size)
+{
+    // hadamard_gate(assets, 6);
+    // c_phase_shift_gate(assets, 6, 5, M_PI_2);
+    // c_phase_shift_gate(assets, 6, 4, M_PI_4);
+    // hadamard_gate(assets, 5);
+    // c_phase_shift_gate(assets, 5, 4, M_PI_2);
+    // hadamard_gate(assets, 4);
+
+    for (int l = L_size - 1; l >= 0; l--) {
+        //printf("H: %d\n", l);
+        hadamard_gate(assets, l);
+        for (int k = l - 1; k >= 0; k--) {
+            //printf("P: pi/%d, %d, %d\n", INT_POW(2, L_size - k - 1), l, k);
+            c_phase_shift_gate(assets, l, k, M_PI / (double) INT_POW(2, L_size - k - 1));
+        }
+    }
+}
+
 static void quantum_computation(Assets *assets, int a, int C)
 {
     int L_size;
@@ -475,13 +494,7 @@ static void quantum_computation(Assets *assets, int a, int C)
         x *= 2;
     }
 
-    /* Inverse quantum Fourier transform (7 qubits only). */
-    hadamard_gate(assets, 6);
-    c_phase_shift_gate(assets, 6, 5, M_PI_2);
-    c_phase_shift_gate(assets, 6, 4, M_PI_4);
-    hadamard_gate(assets, 5);
-    c_phase_shift_gate(assets, 5, 4, M_PI_2);
-    hadamard_gate(assets, 4);
+    inverse_QFT(assets, L_size);
 }
 
 /********** SHOR'S ALGORITHM FUNCTIONS **********/
@@ -500,7 +513,7 @@ static void get_continued_fractions_denominators(double omega, int num_fractions
     for (int i = 0; i < num_fractions; i++) {
         omega_inv = 1.0 / omega;
 
-        /* Omega for next loop iteration, which is fractional part of omega_inv. */
+        /* Omega for next loop iteration, which is the fractional part of omega_inv. */
         omega = omega_inv - (double) ( (int) omega_inv );
 
         /* Coefficient calculation uses next omega value. */
@@ -524,13 +537,18 @@ static void get_continued_fractions_denominators(double omega, int num_fractions
     free(coeffs);
 }
 
-static double read_omega(gsl_vector_complex *current_state, int L_size, int state_num)
+static double read_omega(gsl_vector_complex *current_state, int L_size, int M_size, int state_num)
 {
     int x_tilde;
+    int power;
 
-    x_tilde += GET_BIT(state_num, 6) << 0;
-    x_tilde += GET_BIT(state_num, 5) << 1;
-    x_tilde += GET_BIT(state_num, 4) << 2;
+    power = 0;
+
+    /* Read x_tilde register in reverse order. */
+    for (int i = L_size + M_size - 1; i >= M_size; i--) {
+        x_tilde += GET_BIT(state_num, i) << power;
+        power++;
+    }
 
     return (double) x_tilde / (double) INT_POW(2, L_size);
 }
@@ -582,7 +600,7 @@ static int find_period(Assets *assets, gsl_rng *rng, int a, int C)
     quantum_computation(assets, a, C);
 
     measured_state_num = measure_state(assets, rng);
-    omega = read_omega(*assets->current_state, assets->register_size[L], measured_state_num);
+    omega = read_omega(*assets->current_state, assets->register_size[L], assets->register_size[M], measured_state_num);
 
     denominators = (int *) malloc(NUM_CONTINUED_FRACTIONS * sizeof(int));
     get_continued_fractions_denominators(omega, NUM_CONTINUED_FRACTIONS, denominators);
@@ -617,25 +635,24 @@ static ErrorCode shors_algorithm(Assets *assets, gsl_rng *rng, int factors[2], i
     int period;
     int gcd;
 
-    for (int i = 2; i < SMALL_POWER_TOLERANCE; i++) {
-        if (is_power(i, C)) {
-            factors[0] = i;
-            factors[1] = C / i;
-            return NO_ERROR;
-        }
-    }
+    // for (int i = 2; i < SMALL_POWER_TOLERANCE; i++) {
+    //     if (is_power(i, C)) {
+    //         factors[0] = i;
+    //         factors[1] = C / i;
+    //         return NO_ERROR;
+    //     }
+    // }
 
-     for (int trial_int = SMALL_POWER_TOLERANCE; trial_int < C; trial_int++) {
-    //for (int trial_int = 14; trial_int < C; trial_int++) {
+    for (int trial_int = SMALL_POWER_TOLERANCE; trial_int < C; trial_int++) {
         
         gcd = greatest_common_divisor(trial_int, C);
 
-        if (gcd > 1) {
-            factors[0] = gcd;
-            factors[1] = C / gcd;
+        // if (gcd > 1) {
+        //     factors[0] = gcd;
+        //     factors[1] = C / gcd;
             
-            return NO_ERROR;
-        }
+        //     return NO_ERROR;
+        // }
 
         period = find_period(assets, rng, trial_int, C);
 
@@ -647,8 +664,23 @@ static ErrorCode shors_algorithm(Assets *assets, gsl_rng *rng, int factors[2], i
 
         factors[0] = greatest_common_divisor(INT_POW(trial_int, period / 2) + 1, C);
         factors[1] = greatest_common_divisor(INT_POW(trial_int, period / 2) - 1, C);
+        
         break;
     }
+
+    // while (true) {
+    //     int trial_int = 13;
+    //     period = find_period(assets, rng, trial_int, C);
+
+    //     if (period % 2 != 0) {
+    //         continue;
+    //     } else if (INT_POW(trial_int, period / 2) % C == -1) {
+    //         continue;
+    //     }
+
+    //     break;
+    // }
+    
 
     return NO_ERROR;
 }
@@ -684,11 +716,11 @@ int main(int argc, char *argv[])
     /* Seed random number generator with an integer derived from the current time. */
     gsl_rng_set(rng, (unsigned) time(NULL));
 
-    num_qubits = 7;
+    num_qubits = 14;
     num_states = INT_POW(2, num_qubits);
 
-    assets.register_size[L] = 3; /* L register. */
-    assets.register_size[M] = 4; /* M register. */
+    assets.register_size[L] = 9; /* L register. */
+    assets.register_size[M] = 5; /* M register. */
 
     assets.state_a = gsl_vector_complex_alloc(num_states);
     assets.state_b = gsl_vector_complex_alloc(num_states);
@@ -698,7 +730,9 @@ int main(int argc, char *argv[])
     assets.current_state = &assets.state_a;
     assets.new_state = &assets.state_b;
 
-    error = shors_algorithm(&assets, rng, factors, 15);
+    read_omega(*assets.current_state, assets.register_size[L], assets.register_size[M], 3);
+
+    error = shors_algorithm(&assets, rng, factors, 21);
     ERROR_CHECK(error);
 
     gsl_vector_complex_free(assets.state_a);
