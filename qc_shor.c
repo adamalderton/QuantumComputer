@@ -52,7 +52,7 @@
 #define HADAMARD_SCALE 1.0/M_SQRT2
 #define NULL_ALT_ELEMENT gsl_complex_rect(0.0, 0.0)
 #define NO_CONDITIONAL_QUBIT -1
-#define COMPLEX_ELEMENT 255
+#define COMPLEX_ELEMENT -127
 
 /* Tweakable parameters. */
 #define NUM_CONTINUED_FRACTIONS 15
@@ -632,6 +632,19 @@ static ErrorCode shors_algorithm(unsigned int factors[2], unsigned int C, Regist
             printf(" --- A valid period was not found and hence C = %d could not be factorised.\n", C);
             return PERIOD_NOT_FOUND;
         }
+
+        if (verbose) {
+            printf(" --- A valid period = %d has been found so the factors of C = %d have been found quantum mechanically.\n\n", period, C);
+        }
+
+        factors[0] = greatest_common_divisor(INT_POW(forced_trial_int, period / 2) + 1, C);
+        factors[1] = greatest_common_divisor(INT_POW(forced_trial_int, period / 2) - 1, C);
+
+        if (factors[0] == 1 || factors[1] == 1) {
+            printf(" --- The factors found are trivial, consider trying a different trial integer.\n");
+        }
+
+        return NO_ERROR;
     }
 
     /*
@@ -646,7 +659,7 @@ static ErrorCode shors_algorithm(unsigned int factors[2], unsigned int C, Regist
         error = find_period(&period, C, trial_int, reg, assets, rng);
         if (error == PERIOD_NOT_FOUND) {
             if (verbose) {
-                printf(" --- A period could not be found for a = %d.\n\n", trial_int);
+                printf(" --- A valid period could not be found for a = %d.\n\n", trial_int);
             }
             continue;
         }
@@ -671,7 +684,8 @@ static ErrorCode shors_algorithm(unsigned int factors[2], unsigned int C, Regist
         factors[1] = greatest_common_divisor(INT_POW(trial_int, period / 2) - 1, C);
 
         if (factors[0] == 1 || factors[1] == 1) {
-            printf(" --- The factors found are trivial, consider running the program again.\n");
+            printf(" --- Factors found are trivial. Continuing to find non-trivial factors.\n");
+            continue;
         }
 
         return NO_ERROR;
@@ -826,7 +840,9 @@ int main(int argc, char *argv[])
     gsl_spmatrix_char_free(assets.comp_matrix);
     gsl_rng_free(rng);
 
-    fprintf(stdout, " --- Factors of %d found: (%d, %d).\n", C, factors[0], factors[1]);
+    if (error != PERIOD_NOT_FOUND) {
+        fprintf(stdout, " --- Factors of %d found: (%d, %d).\n", C, factors[0], factors[1]);
+    }
 
     return NO_ERROR;
 }
