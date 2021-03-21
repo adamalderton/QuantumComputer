@@ -55,13 +55,8 @@
 #define NON_INT_ELEMENT -INT_MAX
 
 /* Tweakable parameters. */
-#define SMALL_POWER_TOLERANCE 5
-#define NUM_CONTINUED_FRACTIONS 7
-#define TRIALS_PER_DENOMINATOR 5
-
-
-#define L 0
-#define M 1
+#define NUM_CONTINUED_FRACTIONS 15
+#define TRIALS_PER_DENOMINATOR 10
 
 /* 
    Many functions below return an errorcode. This macro is called after these functions return
@@ -131,8 +126,6 @@ typedef struct {
     int num_qubits;
     int num_states;
 } Register;
-
-/* Global Variables */
 
 /* 
    Does NOT contain the necessary scale of 1/sqrt(2),
@@ -398,12 +391,10 @@ static void c_phase_shift_gate(int c_qubit_num, int qubit_num, double theta, Reg
 static void c_amodc_gate(int C, int atox, int c_qubit_num, Register reg, Assets *assets)
 {
     int A; /* Holds a^x (mod C). */
-    int M_size;
     int j; /* The column of the matrix in row k in which the 1 resides. */
     int f; /* Used in the calculation of the permutation matrix. */
 
     A = atox % C;
-    M_size = assets->register_size[M];
 
     /* Using notation from instruction document, loop over rows (k) of matrix. */
     for (int k = 0; k < reg.num_states; k++) {
@@ -418,7 +409,7 @@ static void c_amodc_gate(int C, int atox, int c_qubit_num, Register reg, Assets 
 
             /* f must be calculated, which is the decimal value stored in the M register. */
             f = 0;
-            for (int b = 0; b < M_size; b++) {
+            for (int b = 0; b < reg.M_size; b++) {
                 f += GET_BIT(k, b) << b;
             }
 
@@ -443,12 +434,12 @@ static void c_amodc_gate(int C, int atox, int c_qubit_num, Register reg, Assets 
                 j = 0;
 
                 /* M register (concerning f'). */
-                for (int b = 0; b < M_size; b++) {
+                for (int b = 0; b < reg.M_size; b++) {
                     j += GET_BIT(f, b) << b;
                 }
 
                 /* L register (concerning k). */
-                for (int b = M_size; b < reg.num_qubits; b++) {
+                for (int b = reg.M_size; b < reg.num_qubits; b++) {
                     j += GET_BIT(k, b) << b;
                 }
 
@@ -482,30 +473,46 @@ static void quantum_computation(int C, int a, Register reg, Assets *assets)
     int x;
 
     /* Apply Hadamard gate to qubits in the L register. */
-    if (verbose) {
-        printf("            - Applying Hadamard gates.\n");
-    }
     for (int l = (reg.num_qubits - reg.L_size); l < reg.num_qubits; l++) {
         hadamard_gate(l, reg, assets);
     }
 
     /* For each bit value in the L register, apply the conditional a^x (mod C) gate. */
-    if (verbose) {
-        printf("            - Applying f(x) gates.\n");
-    }
     x = 1;
     for (int l = (reg.num_qubits - reg.L_size); l < reg.num_qubits; l++) {
         c_amodc_gate(C, INT_POW(a, x), l, reg, assets);
         x *= 2;
     }
 
-    if (verbose) {
-        printf("            - Performing inverse quantum Fourier transform.\n");
-    }
     inverse_QFT(reg, assets);
 }
 
 /********** SHOR'S ALGORITHM FUNCTIONS **********/
+
+static int greatest_common_divisor(int a, int b)
+{
+    int temp;
+
+    /* Trivial cases. */
+    if (a == 0) {
+        return b;
+    }
+    if (b == 0) {
+        return a;
+    }
+    if (a == b) {
+        return a;
+    }
+
+    /* Simple iterative version of Euclid's algorithm. */
+    while ((a % b) > 0) {
+        temp = a % b;
+        a = b;
+        b = temp;
+    }
+
+    return b;
+}
 
 static void get_continued_fractions_denominators(double omega, int num_fractions, int *denominators)
 {
@@ -561,41 +568,6 @@ static double read_omega(int state_num, Register reg)
     return (double) x_tilde / (double) INT_POW(2, reg.L_size);
 }
 
-static int greatest_common_divisor(int a, int b)
-{
-    int temp;
-
-    /* Trivial cases. */
-    if (a == 0) {
-        return b;
-    }
-    if (b == 0) {
-        return a;
-    }
-    if (a == b) {
-        return a;
-    }
-
-    /* Simple iterative version of Euclid's algorithm. */
-    while ((a % b) > 0) {
-        temp = a % b;
-        a = b;
-        b = temp;
-    }
-
-    return b;
-}
-
-static int small_power_checks(int C, int max_small_power)
-{
-    for (int i = 2; i < max_small_power; i++) {
-        if (C % i == 0) {
-            return i;
-        }
-    }
-    return -1;
-}
-
 static int find_period(int *period, int C, int a, Register reg, Assets *assets, gsl_rng *rng)
 {
     int *denominators;
@@ -603,21 +575,11 @@ static int find_period(int *period, int C, int a, Register reg, Assets *assets, 
     int measured_state_num;
     double omega;
 
-    if (verbose) {
-        printf("        - Performing quantum computation...\n");
-    }
     reset_register(*assets->current_state);
     quantum_computation(C, a, reg, assets);
-
-    if (verbose) {
-        printf("        - Measuring state.\n");
-    }
     measured_state_num = measure_state(reg, assets, rng);
     omega = read_omega(measured_state_num, reg);
 
-    if (verbose) {
-        printf("        - Finding period with continued fractions.\n");
-    }
     denominators = (int *) malloc(NUM_CONTINUED_FRACTIONS * sizeof(int));
     get_continued_fractions_denominators(omega, NUM_CONTINUED_FRACTIONS, denominators);
 
@@ -646,145 +608,93 @@ static int find_period(int *period, int C, int a, Register reg, Assets *assets, 
     return NO_ERROR;
 }
 
-static ErrorCode shors_algorithm(int factors[2], int C, Register reg, Assets *assets, gsl_rng *rng, bool force_quantum, int forced_trial_int)
+static ErrorCode shors_algorithm(int factors[2], int C, Register reg, Assets *assets, gsl_rng *rng, int forced_trial_int)
 {
     ErrorCode error;
     int period;
-    int small_power_factor;
-    int gcd;
 
-    /* 
-        If a trial integer is forced by the user and quantum mechanical means
-        is also forced, the period only needs to be found wwhen considering that trial integer.
+    /*
+        If a trial integer has been forced by the user, only attempt to find the period
+        with that integer, as below.
     */
-    if (force_quantum && (forced_trial_int != 0)) {
+    if (forced_trial_int != 0) {
+        if (verbose) {
+            printf(" --- Forced trial integer a = %d, finding factors quantum mechanically...\n", forced_trial_int);
+        }
+
         error = find_period(&period, C, forced_trial_int, reg, assets, rng);
-        ERROR_CHECK(error);
+        if (error == PERIOD_NOT_FOUND) {
+            printf(" --- A valid period was not found and hence C = %d could not be factorised.\n", C);
+            return PERIOD_NOT_FOUND;
+        }
 
         if (period % 2 != 0) {
             if (verbose) {
                 printf(" --- Period was found to be %d, but it did not pass the validity requirements.\n", period);
             }
+            printf(" --- A valid period was not found and hence C = %d could not be factorised.\n", C);
             return PERIOD_NOT_FOUND;
 
         } else if (INT_POW(forced_trial_int, period / 2) % C == -1) {
             if (verbose) {
                 printf(" --- Period was found to be %d, but it did not pass the validity requirements\n", period);
             }
+            printf(" --- A valid period was not found and hence C = %d could not be factorised.\n", C);
             return PERIOD_NOT_FOUND;
+        }
+    }
+
+    /*
+        If a trial integer has not been specified by the user, loop over valid integers
+        1 < a < C until a valid period hence factors are found.
+    */
+    for (int trial_int = 2; trial_int < C - 1; trial_int++) {
+        if (verbose) {
+            printf(" --- Trial integer a = %d, finding factors quantum mechanically...\n", trial_int);
+        }
+
+        error = find_period(&period, C, trial_int, reg, assets, rng);
+        if (error == PERIOD_NOT_FOUND) {
+            if (verbose) {
+                printf(" --- A period could not be found for a = %d.\n\n", trial_int);
+            }
+            continue;
+        }
+
+        if (period % 2 != 0) {
+            if (verbose) {
+                printf(" --- Period was found to be %d, but it did not pass the validity requirements.\n\n", period);
+            }
+            continue;
+        } else if (INT_POW(trial_int, period / 2) % C == -1) {
+            if (verbose) {
+                printf(" --- Period was found to be %d, but it did not pass the validity requirements.\n\n", period);
+            }
+            continue;
         }
 
         if (verbose) {
-            printf(" --- A valid period = %d has been found so the factors of C = %d have been found quantum mechanically.\n", period, C);
+            printf(" --- A valid period = %d has been found so the factors of C = %d have been found quantum mechanically.\n\n", period, C);
         }
 
-        factors[0] = greatest_common_divisor(INT_POW(forced_trial_int, period / 2) + 1, C);
-        factors[1] = greatest_common_divisor(INT_POW(forced_trial_int, period / 2) - 1, C);
+        factors[0] = greatest_common_divisor(INT_POW(trial_int, period / 2) + 1, C);
+        factors[1] = greatest_common_divisor(INT_POW(trial_int, period / 2) - 1, C);
+
+        if (factors[0] == 1 || factors[1] == 1) {
+            printf(" --- The factors found are trivial, consider running the program again.\n");
+        }
 
         return NO_ERROR;
     }
 
-    /* 
-        If quantum mechanical factorisation is forced but a trial integer is 
-    */
-    else if (force_quantum && (forced_trial_int == 0)) {
-        for (int trial_int = SMALL_POWER_TOLERANCE; trial_int < C; trial_int++) {
-
-            error = find_period(&period, C, forced_trial_int, reg, assets, rng);
-            ERROR_CHECK(error);
-
-            if (period % 2 != 0) {
-                if (verbose) {
-                    printf(" --- Period was found to be %d, but it did not pass the validity requirements.\n", period);
-                }
-                continue;
-
-            } else if (INT_POW(forced_trial_int, period / 2) % C == -1) {
-                if (verbose) {
-                    printf(" --- Period was found to be %d, but it did not pass the validity requirements\n", period);
-                }
-                continue;
-            }
-
-            if (verbose) {
-                printf(" --- A valid period = %d has been found so the factors of C = %d have been found quantum mechanically.\n", period, C);
-            }
-
-            factors[0] = greatest_common_divisor(INT_POW(forced_trial_int, period / 2) + 1, C);
-            factors[1] = greatest_common_divisor(INT_POW(forced_trial_int, period / 2) - 1, C);
-
-            return NO_ERROR;
-        }
-    }
-
-    /* 
-       If finding factors quantum mechanically is not forced,
-       classical methods can be used as below, un
-    */
-    else {
-        small_power_factor = small_power_checks(C, SMALL_POWER_TOLERANCE);
-
-        if (small_power_factor != -1) {
-            if (verbose) {
-                printf(" --- C = %d is small power of %d, hence factors were found classically.\n", C, small_power_factor);
-            }
-
-            factors[0] = small_power_factor;
-            factors[1] = C / small_power_factor;
-
-            return NO_ERROR;
-        }
-
-        for (int trial_int = SMALL_POWER_TOLERANCE; trial_int < C; trial_int++) {
-            gcd = greatest_common_divisor(trial_int, C);
-
-            if (gcd > 1) {
-                factors[0] = gcd;
-                factors[1] = C / gcd;
-
-                if (verbose) {
-                    printf(" --- Greatest common divisor between C = %d and a = %d is %d, hence factors were found classically.\n", C, trial_int, gcd);
-                }
-
-                return NO_ERROR;
-            }
-
-            if (verbose) {
-                printf(" --- Trial integer a = %d has passed classical tests - finding factors quantum mechanically...\n", trial_int);
-            }
-
-            error = find_period(&period, C, trial_int, reg, assets, rng);
-            ERROR_CHECK(error);
-
-            if (period % 2 != 0) {
-                if (verbose) {
-                    printf(" --- Period was found to be %d, but it did not pass the validity requirements. Trying another trial integer...\n", period);
-                }
-                continue;
-            } else if (INT_POW(trial_int, period / 2) % C == -1) {
-                if (verbose) {
-                    printf(" --- Period was found to be %d, but it did not pass the validity requirements. Trying another trial integer...\n", period);
-                }
-                continue;
-            }
-
-            if (verbose) {
-                printf(" --- A valid period = %d has been found so the factors of C = %d have been found quantum mechanically.\n", period, C);
-            }
-
-            factors[0] = greatest_common_divisor(INT_POW(trial_int, period / 2) + 1, C);
-            factors[1] = greatest_common_divisor(INT_POW(trial_int, period / 2) - 1, C);
-            
-            return NO_ERROR;
-        }
-    }
+    printf(" --- A valid period was not found and hence C = %d could not be factorised.\n", C);
 
     return PERIOD_NOT_FOUND;
 }
 
 /*********** SETUP FUNCTIONS **********/
 
-static ErrorCode parse_command_line_args(int argc, char *argv[], Register *reg, int *C, bool *force_quantum, int *forced_trial_int)
+static ErrorCode parse_command_line_args(int argc, char *argv[], Register *reg, int *C, int *forced_trial_int)
 {
     /* Todo:
         - take continued fraction parameters (current #define d)
@@ -800,7 +710,7 @@ static ErrorCode parse_command_line_args(int argc, char *argv[], Register *reg, 
     bool L_flag = false;
     bool M_flag = false;
 
-    while ((arg = getopt(argc, argv, "C:L:M:i:vq")) != -1) {
+    while ((arg = getopt(argc, argv, "C:L:M:i:v")) != -1) {
         switch(arg) {
             case 'C':
                 *C = atoi(optarg);
@@ -819,10 +729,6 @@ static ErrorCode parse_command_line_args(int argc, char *argv[], Register *reg, 
             
             case 'v':
                 verbose = true;
-                break;
-            
-            case 'q':
-                *force_quantum = true;
                 break;
             
             case 'i':
@@ -869,10 +775,9 @@ int main(int argc, char *argv[])
     gsl_rng *rng;
     int C;
     int factors[2];
-    bool force_quantum = false;
     int forced_trial_int = 0;
 
-    error = parse_command_line_args(argc, argv, &reg, &C, &force_quantum, &forced_trial_int);
+    error = parse_command_line_args(argc, argv, &reg, &C, &forced_trial_int);
     ERROR_CHECK(error);
 
     /* Setup rng, seeded by integer derived from the current time. */
@@ -888,7 +793,7 @@ int main(int argc, char *argv[])
     assets.current_state = &assets.state_a;
     assets.new_state = &assets.state_b;
 
-    error = shors_algorithm(factors, C, reg, &assets, rng, force_quantum, forced_trial_int);
+    error = shors_algorithm(factors, C, reg, &assets, rng, forced_trial_int);
     ERROR_CHECK(error);
 
     /* Free assets and rng generator. */
@@ -898,7 +803,7 @@ int main(int argc, char *argv[])
     gsl_spmatrix_int_free(assets.comp_matrix);
     gsl_rng_free(rng);
 
-    fprintf(stdout, " --- Factors of %d: (%d, %d).\n", C, factors[0], factors[1]);
+    fprintf(stdout, " --- Factors of %d found: (%d, %d).\n", C, factors[0], factors[1]);
 
     return NO_ERROR;
 }
