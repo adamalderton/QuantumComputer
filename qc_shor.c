@@ -55,6 +55,7 @@
 #define NON_INT_ELEMENT -INT_MAX
 
 /* Tweakable parameters. */
+#define SMALL_POWER_TOLERANCE 5
 #define NUM_CONTINUED_FRACTIONS 15
 #define TRIALS_PER_DENOMINATOR 10
 
@@ -253,6 +254,30 @@ static void reset_register(gsl_vector_complex *current_state)
 
     /* Sets register to |000 ... 001>. */
     gsl_vector_complex_set(current_state, 1, gsl_complex_polar(1.0, 0.0));
+}
+
+static void issue_warnings(int C, Register reg)
+{
+    /* 
+        If the number to be factored C is a power of a small integer,
+        results can be unreliable. This includes even numbers.
+    */
+    for (int base = 2; base < SMALL_POWER_TOLERANCE; base++) {
+        if (C % base == 0) {
+            printf(" --- *WARNING* C = %d is a small power of small integer %d. Results may be unreliable.\n", C, base);
+            break;
+        }
+    }
+
+    /* To find valid factors, 2^M must be greater than or equal to C. */
+    if (INT_POW(2, reg.M_size) < C) {
+        printf(" --- *WARNING* The M register is not large enough for reliable results. Ensure 2^M >= C. Minimum: M = %d.\n", (int) (log2(C) + 0.5));
+    }
+
+    /* To be confident of finding the period, 2^L should be greater than or equal to C. */
+    if (INT_POW(2, reg.L_size) < C*C) {
+        printf(" --- *WARNING* The L register is not large enough for confidence in finding the period. Ensure 2^L >= C^2 for confidence. Suggested: L = %d.\n", (int) (log2(C*C) + 0.5));
+    }
 }
 
 /********** QUANTUM GATE FUNCTIONS **********/
@@ -613,13 +638,15 @@ static ErrorCode shors_algorithm(int factors[2], int C, Register reg, Assets *as
     ErrorCode error;
     int period;
 
+    printf("\n --- Finding factors...\n\n");
+
     /*
         If a trial integer has been forced by the user, only attempt to find the period
         with that integer, as below.
     */
     if (forced_trial_int != 0) {
         if (verbose) {
-            printf(" --- Forced trial integer a = %d, finding factors quantum mechanically...\n", forced_trial_int);
+            printf(" --- Forced trial integer a = %d, finding period ...\n", forced_trial_int);
         }
 
         error = find_period(&period, C, forced_trial_int, reg, assets, rng);
@@ -650,7 +677,7 @@ static ErrorCode shors_algorithm(int factors[2], int C, Register reg, Assets *as
     */
     for (int trial_int = 2; trial_int < C - 1; trial_int++) {
         if (verbose) {
-            printf(" --- Trial integer a = %d, finding factors quantum mechanically...\n", trial_int);
+            printf(" --- Trial integer a = %d, finding period ...\n", trial_int);
         }
 
         error = find_period(&period, C, trial_int, reg, assets, rng);
@@ -777,13 +804,15 @@ int main(int argc, char *argv[])
     int factors[2];
     int forced_trial_int = 0;
 
-    error = parse_command_line_args(argc, argv, &reg, &C, &forced_trial_int);
-    ERROR_CHECK(error);
-
     /* Setup rng, seeded by integer derived from the current time. */
     rng_type = gsl_rng_mt19937;
     rng = gsl_rng_alloc(rng_type);
     gsl_rng_set(rng, (unsigned) time(NULL));
+
+    error = parse_command_line_args(argc, argv, &reg, &C, &forced_trial_int);
+    ERROR_CHECK(error);
+
+    issue_warnings(C, reg);
 
     /* Setup contents of assets, including matrices and vector states. */
     assets.state_a = gsl_vector_complex_alloc(reg.num_states);
