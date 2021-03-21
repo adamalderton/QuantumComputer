@@ -148,59 +148,6 @@ const int C_PHASE_SHIFT_BASE_MATRIX[4][4] = {
 bool verbose = false;
 
 /********** UTILITY FUNCTIONS **********/
-int hi = {1
-// static void display_state(Assets *assets)
-// {
-//     gsl_vector_complex *state;
-//     double prob;
-//     int x;
-//     int fx;
-
-//     state = *assets->current_state;
-
-//     for (int i = 0; i < num_states; i++) {
-
-//         prob = gsl_complex_abs(gsl_vector_complex_get(state, i));
-//         x = 0;
-//         fx = 0;
-
-//         if (prob != 0.0) {
-
-//             printf("|");
-//             for (int b = num_qubits - 1; b >= 0; b--) {
-//                 printf("%d", GET_BIT(i, b));
-//             }
-//             printf("> ");
-
-//             printf("%.2f", prob);
-
-//             x += GET_BIT(i, 6) << 2;
-//             x += GET_BIT(i, 5) << 1;
-//             x += GET_BIT(i, 4) << 0;
-
-//             fx += GET_BIT(i, 0) << 0;
-//             fx += GET_BIT(i, 1) << 1;
-//             fx += GET_BIT(i, 2) << 2;
-//             fx += GET_BIT(i, 3) << 3;
-
-//             printf("x = %d, f(x) = %d", x, fx);
-//         }
-//     }
-// }
-
-// static void check_norm(gsl_vector_complex *state)
-// {
-//     double sum = 0.0;
-
-//     for (int i = 0; i < num_states; i++) {
-//         sum += gsl_complex_abs2(gsl_vector_complex_get(state, i));
-//     }
-
-//     printf("%.4f\n", sum);
-// }
-
-};
-
 
 static void swap_states(Assets *assets)
 {
@@ -723,11 +670,6 @@ static ErrorCode shors_algorithm(int factors[2], int C, Register reg, Assets *as
 
 static ErrorCode parse_command_line_args(int argc, char *argv[], Register *reg, int *C, int *forced_trial_int)
 {
-    /* Todo:
-        - take continued fraction parameters (current #define d)
-        - warning if registers are too small to be confident about finding a factor
-    */
-
     extern char *optarg;
     extern int optind;
     const char *usage = "Usage: ./qc_shor.exe -C num -L L_reg_size -M M_reg_size [-i trial_int] [-v] [-q]\n";
