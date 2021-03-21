@@ -71,20 +71,9 @@
         return error; \
     }
 
-
-/* Checks for the success of the opening of a file. */
-#define FILE_CHECK(file, filename) \
-    if (file == NULL) { \
-        fprintf(stderr, "Error: Unable to open file \"%s\".\n", filename);\
-        return BAD_FILENAME; \
-    }
-
-/* Checks for the success of a line read from a file. */
-#define READLINE_CHECK(result, filename, in_file) \
-    if (result == NULL) { \
-        fprintf(stderr, "Error: Could not read file \"%s\".\n", filename); \
-        fclose(in_file); \
-        return BAD_FILE; \
+#define ALLOC_CHECK(alloc_pointer) \
+    if (alloc_pointer == NULL) { \
+        fprintf(stderr, "Error: Insufficient memory.\n"); \
     }
 
 /* 
@@ -106,6 +95,7 @@
 /* Enum to store the various error codes than can be returned within this program. */
 typedef enum {
     NO_ERROR = 0,
+    INSUFFICIENT_MEMORY,
     BAD_ARGUMENTS,
     PERIOD_NOT_FOUND,
     UNKNOWN_ERROR,
@@ -149,6 +139,14 @@ bool verbose = false;
 
 /********** UTILITY FUNCTIONS **********/
 
+static void compress_comp_matrix(Assets *assets)
+{
+    gsl_spmatrix_int_csc(assets->result_matrix, assets->comp_matrix);
+
+    /* Reset comp_matrix straight away as to reduce memory bloat. */
+    gsl_spmatrix_int_set_zero(assets->comp_matrix);
+}
+
 static void swap_states(Assets *assets)
 {
     gsl_vector_complex **temp;
@@ -156,9 +154,6 @@ static void swap_states(Assets *assets)
     temp = assets->new_state;
     assets->new_state = assets->current_state;
     assets->current_state = temp;
-
-    /* Reset comp_matrix. */
-    gsl_spmatrix_int_set_zero(assets->comp_matrix);
 }
 
 static int measure_state(Register reg, Assets *assets, gsl_rng *rng)
@@ -218,7 +213,7 @@ static void issue_warnings(int C, Register reg)
 
     /* To find valid factors, 2^M must be greater than or equal to C. */
     if (INT_POW(2, reg.M_size) < C) {
-        printf(" --- *WARNING* The M register is not large enough for reliable results. Ensure 2^M >= C. Minimum: M = %d.\n", (int) (log2(C) + 0.5));
+        printf(" --- *WARNING* The M register is not large enough for reliable results. Ensure 2^M >= C. Minimum: M = %d.\n", ((int) (log2(C) + 0.5)) + 1);
     }
 
     /* To be confident of finding the period, 2^L should be greater than or equal to C. */
@@ -317,7 +312,7 @@ static void hadamard_gate(int qubit_num, Register reg, Assets *assets)
         }
     }
 
-    gsl_spmatrix_int_csc(assets->result_matrix, assets->comp_matrix);
+    compress_comp_matrix(assets);
 
     operate_matrix(reg, assets, HADAMARD_SCALE, NULL_ALT_ELEMENT);
 }
@@ -355,7 +350,7 @@ static void c_phase_shift_gate(int c_qubit_num, int qubit_num, double theta, Reg
         }
     }
 
-    gsl_spmatrix_int_csc(assets->result_matrix, assets->comp_matrix);
+    compress_comp_matrix(assets);
 
     operate_matrix(reg, assets, 1.0, gsl_complex_polar(1.0, theta));
 }
@@ -420,8 +415,7 @@ static void c_amodc_gate(int C, int atox, int c_qubit_num, Register reg, Assets 
         }
     }
 
-    /* Finally, compress the matrix stored in comp_matrix into result_matrix. */
-    gsl_spmatrix_int_csc(assets->result_matrix, assets->comp_matrix);
+    compress_comp_matrix(assets);
 
     operate_matrix(reg, assets, 1.0, NULL_ALT_ELEMENT);
 }
@@ -495,7 +489,7 @@ static void get_continued_fractions_denominators(double omega, int num_fractions
     int *coeffs;
 
     coeffs = (int *) malloc(num_fractions * sizeof(int));
-    // CHECK_ALLOC();
+    ALLOC_CHECK(coeffs);
 
     for (int i = 0; i < num_fractions; i++) {
         omega_inv = 1.0 / omega;
@@ -553,6 +547,8 @@ static int find_period(int *period, int C, int a, Register reg, Assets *assets, 
     omega = read_omega(measured_state_num, reg);
 
     denominators = (int *) malloc(NUM_CONTINUED_FRACTIONS * sizeof(int));
+    ALLOC_CHECK(denominators);
+
     get_continued_fractions_denominators(omega, NUM_CONTINUED_FRACTIONS, denominators);
 
     /* With denominators found, trial multiples of them until the period is found. */
@@ -749,6 +745,8 @@ int main(int argc, char *argv[])
     /* Setup rng, seeded by integer derived from the current time. */
     rng_type = gsl_rng_mt19937;
     rng = gsl_rng_alloc(rng_type);
+    ALLOC_CHECK(rng);
+
     gsl_rng_set(rng, (unsigned) time(NULL));
 
     error = parse_command_line_args(argc, argv, &reg, &C, &forced_trial_int);
@@ -756,11 +754,20 @@ int main(int argc, char *argv[])
 
     issue_warnings(C, reg);
 
-    /* Setup contents of assets, including matrices and vector states. */
+    /* 
+        Setup contents of assets, including matrices and vector states.
+        The most memory consuming objects are allocated here straight away
+        such that the program does not run out of memory mid-way through computation.
+    */
     assets.state_a = gsl_vector_complex_alloc(reg.num_states);
+    ALLOC_CHECK(assets.state_a);
     assets.state_b = gsl_vector_complex_alloc(reg.num_states);
+    ALLOC_CHECK(assets.state_b);
     assets.comp_matrix = gsl_spmatrix_int_alloc(reg.num_states, reg.num_states);
+    ALLOC_CHECK(assets.comp_matrix);
     assets.result_matrix = gsl_spmatrix_int_alloc_nzmax(reg.num_states, reg.num_states, reg.num_states, GSL_SPMATRIX_CSC);
+    ALLOC_CHECK(assets.result_matrix);
+
     assets.current_state = &assets.state_a;
     assets.new_state = &assets.state_b;
 
