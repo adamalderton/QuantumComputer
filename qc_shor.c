@@ -172,16 +172,16 @@ typedef enum {
 /*
     Struct to store matrices relevant to the program.
 
-    Stored are two matrices, result_matrix and comp_matrix. Within this program,
-    matrices are constructed within comp_matrix which is a sparse matrix of the
-    coordinate type, and comp_matrix is then compressed into result_matrix by the
-    function compress_comp_matrix(). The result matrix is then used in matrix-vector
+    Stored are two matrices, csr_matrix and build_matrix. Within this program,
+    matrices are constructed within build_matrix which is a sparse matrix of the
+    coordinate type, and build_matrix is then compressed into csr_matrix by the
+    function compress_build_matrix(). The result matrix is then used in matrix-vector
     multiplications as its compressed row format is more efficient for matrix-vector
     multiplications, especially for large matrices.
 */
 typedef struct {
-    gsl_spmatrix_char *result_matrix;
-    gsl_spmatrix_char *comp_matrix;
+    gsl_spmatrix_char *csr_matrix;
+    gsl_spmatrix_char *build_matrix;
 } GateMatrices;
 
 /*
@@ -251,22 +251,22 @@ bool very_verbose = false;
 /********** UTILITY FUNCTIONS **********/
 
 /****************************************************************************************
-    compress_comp_matrix -- Compress the coordinate based comp_matrix into the 
-                            column compressed result_matrix. comp_matrix is also
+    compress_build_matrix -- Compress the coordinate based build_matrix into the 
+                            column compressed csr_matrix. build_matrix is also
                             zeroed out in preparation for the next matrix operation.
     
     Parameters:
         GateMatrices matrices
-            Contains comp_matrix and result_matrix pointers.
+            Contains build_matrix and csr_matrix pointers.
 
  ****************************************************************************************/
-static void compress_comp_matrix(GateMatrices matrices)
+static void compress_build_matrix(GateMatrices matrices)
 {
-    /* Compress comp_matrix into result_matrix in compressed column format. */
-    gsl_spmatrix_char_csr(matrices.result_matrix, matrices.comp_matrix);
+    /* Compress build_matrix into csr_matrix in compressed column format. */
+    gsl_spmatrix_char_csr(matrices.csr_matrix, matrices.build_matrix);
 
-    /* Reset comp_matrix straight away as to reduce memory bloat. */
-    gsl_spmatrix_char_set_zero(matrices.comp_matrix);
+    /* Reset build_matrix straight away as to reduce memory bloat. */
+    gsl_spmatrix_char_set_zero(matrices.build_matrix);
 }
 
 
@@ -398,7 +398,7 @@ static void issue_warnings(unsigned int C, Register reg)
 
 
 /****************************************************************************************
-    operate_matrix -- With a matrix built and compressed in assets.result_matrix,
+    operate_matrix -- With a matrix built and compressed in assets.csr_matrix,
                       operate it on the vector wavefunction *assets.current_state.
                       The result is stored in *assets.current_state.
     
@@ -537,17 +537,17 @@ static void hadamard_gate(unsigned int qubit_num, Register reg, GateMatrices mat
                 /* Retrieve element from base matrix. */
                 element = HADAMARD_BASE_MATRIX[GET_BIT(i, qubit_num)][GET_BIT(j, qubit_num)];
 
-                /* Insert element in comp_matrix. */
-                gsl_spmatrix_char_set(matrices.comp_matrix, i, j, element);
+                /* Insert element in build_matrix. */
+                gsl_spmatrix_char_set(matrices.build_matrix, i, j, element);
             }
         }
     }
 
-    /* Compress comp_matrix into result_matrix for efficient multiplication. */
-    compress_comp_matrix(matrices);
+    /* Compress build_matrix into csr_matrix for efficient multiplication. */
+    compress_build_matrix(matrices);
 
     /* With the Hadamard matrix built and compressed, operate the matrix with the scale 1/sqrt(2). */
-    operate_matrix(reg, matrices.result_matrix, HADAMARD_SCALE, NULL_ALT_ELEMENT);
+    operate_matrix(reg, matrices.csr_matrix, HADAMARD_SCALE, NULL_ALT_ELEMENT);
 }
 
 
@@ -613,20 +613,20 @@ static void c_phase_shift_gate(unsigned int c_qubit_num, unsigned int qubit_num,
                     [(2*GET_BIT(i, c_qubit_num)) + GET_BIT(i, qubit_num)]
                     [(2*GET_BIT(j, c_qubit_num)) + GET_BIT(j, qubit_num)];
 
-                /* Insert element in comp_matrix. */
-                gsl_spmatrix_char_set(matrices.comp_matrix, i, j, element);
+                /* Insert element in build_matrix. */
+                gsl_spmatrix_char_set(matrices.build_matrix, i, j, element);
             }
         }
     }
 
-    /* Compress comp_matrix into result_matrix for efficient multiplication. */
-    compress_comp_matrix(matrices);
+    /* Compress build_matrix into csr_matrix for efficient multiplication. */
+    compress_build_matrix(matrices);
 
     /*
         With the phase shift matrix built and compressed, operate it with
         the alt_element being z = e^(i\theta).
     */
-    operate_matrix(reg, matrices.result_matrix, 1.0, gsl_complex_polar(1.0, theta));
+    operate_matrix(reg, matrices.csr_matrix, 1.0, gsl_complex_polar(1.0, theta));
 }
 
 
@@ -672,7 +672,7 @@ static void c_amodc_gate(unsigned int C, unsigned long long int atox, unsigned i
 
         /* If l_0 (c_qubit_num) is 0, j = k. */
         if (GET_BIT(k, c_qubit_num) == 0) {
-            gsl_spmatrix_char_set(matrices.comp_matrix, k, k, 1);
+            gsl_spmatrix_char_set(matrices.build_matrix, k, k, 1);
             continue;
         
         /* If l_0 = 1 ... */
@@ -693,7 +693,7 @@ static void c_amodc_gate(unsigned int C, unsigned long long int atox, unsigned i
              */
             if (f >= C) {
 
-                gsl_spmatrix_char_set(matrices.comp_matrix, k, k, 1);
+                gsl_spmatrix_char_set(matrices.build_matrix, k, k, 1);
                 continue;
 
             } else {
@@ -714,14 +714,14 @@ static void c_amodc_gate(unsigned int C, unsigned long long int atox, unsigned i
                     j += GET_BIT(k, b) << b;
                 }
 
-                gsl_spmatrix_char_set(matrices.comp_matrix, j, k, 1);
+                gsl_spmatrix_char_set(matrices.build_matrix, j, k, 1);
             }
         }
     }
 
-    compress_comp_matrix(matrices);
+    compress_build_matrix(matrices);
 
-    operate_matrix(reg, matrices.result_matrix, 1.0, NULL_ALT_ELEMENT);
+    operate_matrix(reg, matrices.csr_matrix, 1.0, NULL_ALT_ELEMENT);
 }
 
 
@@ -1385,10 +1385,10 @@ int main(int argc, char *argv[])
     ALLOC_CHECK(reg.state_a);
     reg.state_b = gsl_vector_complex_alloc(reg.num_states);
     ALLOC_CHECK(reg.state_b);
-    matrices.comp_matrix = gsl_spmatrix_char_alloc(reg.num_states, reg.num_states);
-    ALLOC_CHECK(matrices.comp_matrix);
-    matrices.result_matrix = gsl_spmatrix_char_alloc_nzmax(reg.num_states, reg.num_states, reg.num_states, GSL_SPMATRIX_CSR);
-    ALLOC_CHECK(matrices.result_matrix);
+    matrices.build_matrix = gsl_spmatrix_char_alloc(reg.num_states, reg.num_states);
+    ALLOC_CHECK(matrices.build_matrix);
+    matrices.csr_matrix = gsl_spmatrix_char_alloc_nzmax(reg.num_states, reg.num_states, reg.num_states, GSL_SPMATRIX_CSR);
+    ALLOC_CHECK(matrices.csr_matrix);
 
     reg.current_state = &reg.state_a;
     reg.new_state = &reg.state_b;
@@ -1399,8 +1399,8 @@ int main(int argc, char *argv[])
     /* Cleanup. */
     gsl_vector_complex_free(reg.state_a);
     gsl_vector_complex_free(reg.state_b);
-    gsl_spmatrix_char_free(matrices.result_matrix);
-    gsl_spmatrix_char_free(matrices.comp_matrix);
+    gsl_spmatrix_char_free(matrices.csr_matrix);
+    gsl_spmatrix_char_free(matrices.build_matrix);
     gsl_rng_free(rng);
 
     if (error == NO_ERROR) {
