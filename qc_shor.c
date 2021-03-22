@@ -93,7 +93,8 @@
 #include <stdio.h>
 #include <unistd.h>
 #include <stdbool.h>
-#include <time.h>
+#include <sys/time.h>   /* To time simulation. */
+#include <time.h>       /* To time simulation. */
 
 #include <gsl/gsl_complex.h>
 #include <gsl/gsl_complex_math.h>
@@ -1079,8 +1080,15 @@ static ErrorCode shors_algorithm(unsigned int factors[2], unsigned int C, unsign
 {
     ErrorCode error;
     unsigned int period;
+    //struct timeval tv1, tv2;                    /* Holds the start and end clock times. */
+    struct timespec start, stop;
+    double time_elapsed;                        /* Holds the time elapsed by a calculation. */
 
     printf("\n --- Finding factors...\n\n");
+
+    /* Start simulation timer. */
+    //gettimeofday(&tv1, NULL);
+    clock_gettime(CLOCK_REALTIME, &start);
 
     /*
         If a trial integer has been forced by the user, only attempt to find the period
@@ -1121,6 +1129,17 @@ static ErrorCode shors_algorithm(unsigned int factors[2], unsigned int C, unsign
 
         if (factors[0] == 1 || factors[1] == 1) {
             printf(" --- The factors found are trivial, consider trying a different trial integer.\n");
+        }
+
+        /* Stop simulation timer. */
+        //gettimeofday(&tv2, NULL);
+        clock_gettime(CLOCK_REALTIME, &stop);
+
+        if (verbose) {
+            /* Derive time_elapsed from the timespec struct instances. */
+            //time_elapsed = ( (double) (tv2.tv_usec - tv1.tv_usec) / 1000000 ) + (double) (tv2.tv_sec - tv1.tv_sec);
+            time_elapsed = (stop.tv_sec - start.tv_sec) + (stop.tv_nsec - start.tv_nsec) / 1e9;
+            printf(" --- Time to run Shor's Algorithm: %.6fs.\n", time_elapsed);
         }
 
         return NO_ERROR;
@@ -1168,10 +1187,32 @@ static ErrorCode shors_algorithm(unsigned int factors[2], unsigned int C, unsign
             continue;
         }
 
+        /* Stop simulation timer. */
+        //gettimeofday(&tv2, NULL);
+        clock_gettime(CLOCK_REALTIME, &stop);
+
+        if (verbose) {
+            /* Derive time_elapsed from the timeval struct instances. */
+            //time_elapsed = ( (double) (tv2.tv_usec - tv1.tv_usec) / 1000000 ) + (double) (tv2.tv_sec - tv1.tv_sec);
+            time_elapsed = (stop.tv_sec - start.tv_sec) + (stop.tv_nsec - start.tv_nsec) / 1e9;
+            printf(" --- Time to run Shor's Algorithm: %.6fs.\n", time_elapsed);
+        }
+
         return NO_ERROR;
     }
 
     printf(" --- A valid period was not found and hence C = %d could not be factorised.\n", C);
+
+    /* Stop simulation timer. */
+    //gettimeofday(&tv2, NULL);
+    clock_gettime(CLOCK_REALTIME, &stop);
+
+    if (verbose) {
+        /* Derive time_elapsed from the timeval struct instances. */
+            //time_elapsed = ( (double) (tv2.tv_usec - tv1.tv_usec) / 1000000 ) + (double) (tv2.tv_sec - tv1.tv_sec);
+            time_elapsed = (stop.tv_sec - start.tv_sec) + (stop.tv_nsec - start.tv_nsec) / 1e9;
+            printf(" --- Time to run Shor's Algorithm: %.6fs.\n", time_elapsed);
+    }
 
     return PERIOD_NOT_FOUND;
 }
