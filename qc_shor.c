@@ -70,6 +70,7 @@
 
         M. Galassi, J. Davies, J. Theiler, B. Gough, G. Jungman, P. Alken, M. Booth,
         F. Rossi and R. Ulerich, "GNU Scientific Library 2.6 Reference Manual", 2019.
+
  ****************************************************************************************/
 
 /***********************************PREPROCESSOR*****************************************/
@@ -253,6 +254,7 @@ static void compress_comp_matrix(Assets *assets)
     gsl_spmatrix_char_set_zero(assets->comp_matrix);
 }
 
+
 /****************************************************************************************
     swap_states -- Swaps the pointers current_state and new_state between state_a
                    and state_b.
@@ -270,6 +272,7 @@ static void swap_states(Assets *assets)
     assets->new_state = assets->current_state;
     assets->current_state = temp;
 }
+
 
 /****************************************************************************************
     measure_state -- Collapses the wavefunction current_state into a particular state,
@@ -329,6 +332,7 @@ static unsigned long int measure_state(Register reg, Assets *assets, gsl_rng *rn
     return state_num;
 }
 
+
 /****************************************************************************************
     reset_register -- Resets the qubit register to the state required to begin applying
                       the quantum circuit. That is, |000 ... 001>.
@@ -346,6 +350,7 @@ static void reset_register(gsl_vector_complex *current_state)
     /* Sets register to |000 ... 001>. */
     gsl_vector_complex_set(current_state, 1, gsl_complex_polar(1.0, 0.0));
 }
+
 
 /****************************************************************************************
     issue_warnings -- With user parameters inputted such as the register sizes,
@@ -377,7 +382,9 @@ static void issue_warnings(unsigned int C, Register reg)
     }
 }
 
+
 /********** QUANTUM GATE FUNCTIONS **********/
+
 
 /****************************************************************************************
     operate_matrix -- With a matrix built and compressed in assets.result_matrix,
@@ -467,6 +474,7 @@ static void operate_matrix(Register reg, Assets *assets, double scale, gsl_compl
     swap_states(assets);
 }
 
+
 /****************************************************************************************
     hadamard_gate -- Apply the hadamard gate to a qubit in the qubit register.
 
@@ -532,6 +540,7 @@ static void hadamard_gate(unsigned int qubit_num, Register reg, Assets *assets)
     /* With the Hadamard matrix built and compressed, operate the matrix with the scale 1/sqrt(2). */
     operate_matrix(reg, assets, HADAMARD_SCALE, NULL_ALT_ELEMENT);
 }
+
 
 /****************************************************************************************
     c_phase_shift_gate -- Apply the conditional phase shift gate on a qubit in the qubit
@@ -610,6 +619,7 @@ static void c_phase_shift_gate(unsigned int c_qubit_num, unsigned int qubit_num,
     */
     operate_matrix(reg, assets, 1.0, gsl_complex_polar(1.0, theta));
 }
+
 
 /****************************************************************************************
     c_amodc_gate -- Apply the f(x) = a^x (mod C) gate, where x corresponds to 
@@ -705,6 +715,7 @@ static void c_amodc_gate(unsigned int C, unsigned long long int atox, unsigned i
     operate_matrix(reg, assets, 1.0, NULL_ALT_ELEMENT);
 }
 
+
 /****************************************************************************************
     inverse_QFT -- Perform an inverse quantum Fourier transform on the L register.
     
@@ -734,6 +745,7 @@ static void inverse_QFT(Register reg, Assets *assets)
         }
     }
 }
+
 
 /****************************************************************************************
     quantum_computation -- Perform the series of quantum gates in the quantum circuit
@@ -782,7 +794,9 @@ static void quantum_computation(unsigned int C, unsigned int a, Register reg, As
     inverse_QFT(reg, assets);
 }
 
+
 /********** SHOR'S ALGORITHM FUNCTIONS **********/
+
 
 /****************************************************************************************
     greatest_common_divisor -- Find the greatest common divisor between two integers
@@ -821,6 +835,7 @@ static unsigned int greatest_common_divisor(unsigned int a, unsigned int b)
 
     return b;
 }
+
 
 /****************************************************************************************
     get_continued_fractions_denominators -- Get the denominators of the fractions
@@ -888,6 +903,7 @@ static void get_continued_fractions_denominators(double omega, unsigned int num_
     free(coeffs);
 }
 
+
 /****************************************************************************************
     read_omega -- Reads the value x_tilde from the x_tilde register and divides it by
                   2^L, to yield some harmonic of the fundamental frequency omega.
@@ -922,6 +938,7 @@ static double read_omega(unsigned long int state_num, Register reg)
 
     return (double) x_tilde / (double) INT_POW(2, reg.L_size);
 }
+
 
 /****************************************************************************************
     find_period -- With a trial integer a, attempt to find the period of the function
@@ -1004,6 +1021,7 @@ static ErrorCode find_period(unsigned int *period, unsigned int C, unsigned int 
 
     return NO_ERROR;
 }
+
 
 /****************************************************************************************
     shors_algorithm -- Execute Shor's algorithm for the factorisation of a number. The
@@ -1143,7 +1161,9 @@ static ErrorCode shors_algorithm(unsigned int factors[2], unsigned int C, unsign
     return PERIOD_NOT_FOUND;
 }
 
+
 /*********** SETUP FUNCTIONS **********/
+
 
 /****************************************************************************************
     parse_command_line_args -- Take the user's input and parse the parameters, such
@@ -1270,6 +1290,7 @@ static ErrorCode parse_command_line_args(int argc, char *argv[], Register *reg, 
 
     return NO_ERROR;
 }
+
 
 /****************************************************************************************
     main -- Facilitates the high-level governance of the program including setup,
