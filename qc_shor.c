@@ -60,6 +60,13 @@
         be met.
     
     Notes
+        The program will display warnings for when the register sizes are not above certain
+        limits, which provide confidence in finding periods. However, in many cases, the
+        period can be found with smaller registers. For example, 15 can be factored with
+        L = 3 and M = 4, and 35 can be consistently factored with L = 5, M = 5. Therefore,
+        the warnings are simply there to remind the user that the results from the program
+        may not be 100% reliable.
+
         Much of the notation and methodology within this program is derived from and
         consisten with the D. Candela reference below. An introduction to the notation 
         and to Shor's algorithm can be found there should there be any confusion.
@@ -247,8 +254,8 @@ bool very_verbose = false;
  ****************************************************************************************/
 static void compress_comp_matrix(Assets *assets)
 {
-    /* Compress comp_matrix into result_matrix. */
-    gsl_spmatrix_char_csc(assets->result_matrix, assets->comp_matrix);
+    /* Compress comp_matrix into result_matrix in compressed column format. */
+    gsl_spmatrix_char_csr(assets->result_matrix, assets->comp_matrix);
 
     /* Reset comp_matrix straight away as to reduce memory bloat. */
     gsl_spmatrix_char_set_zero(assets->comp_matrix);
@@ -1347,7 +1354,7 @@ int main(int argc, char *argv[])
     ALLOC_CHECK(assets.state_b);
     assets.comp_matrix = gsl_spmatrix_char_alloc(reg.num_states, reg.num_states);
     ALLOC_CHECK(assets.comp_matrix);
-    assets.result_matrix = gsl_spmatrix_char_alloc_nzmax(reg.num_states, reg.num_states, reg.num_states, GSL_SPMATRIX_CSC);
+    assets.result_matrix = gsl_spmatrix_char_alloc_nzmax(reg.num_states, reg.num_states, reg.num_states, GSL_SPMATRIX_CSR);
     ALLOC_CHECK(assets.result_matrix);
 
     assets.current_state = &assets.state_a;
