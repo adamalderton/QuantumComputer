@@ -256,7 +256,7 @@ bool very_verbose = false;
                             zeroed out in preparation for the next matrix operation.
     
     Parameters:
-        Assets *assets
+        GateMatrices matrices
             Contains comp_matrix and result_matrix pointers.
 
  ****************************************************************************************/
@@ -275,8 +275,8 @@ static void compress_comp_matrix(GateMatrices matrices)
                    and state_b.
     
     Parameters:
-        Assets *assets
-            Contains current_state, new_state, state_a and state_b.
+        Register *reg
+            Contains current_state, new_state double pointers, which are swapped.
 
  ****************************************************************************************/
 static void swap_states(Register *reg)
@@ -295,10 +295,7 @@ static void swap_states(Register *reg)
     
     Parameters:
         Register reg
-            Contains information regarding the qubit register.
-
-        Assets *assets
-            Contains the current state vector in *assets->current_state.
+            Contains current_state and other register size information.
         
         gsl_rng *rng
             Random number generator implemented by GSL.
@@ -353,9 +350,8 @@ static unsigned long int measure_state(Register reg, gsl_rng *rng)
                       the quantum circuit. That is, |000 ... 001>.
     
     Parameters:
-        gsl_vector_complex *current_state
-            Dereferenced pointer to the current state. That is, pass it as
-            *assets.current_state.
+        Register reg
+            Contains the current state of the register which is to be reset.
 
  ****************************************************************************************/
 static void reset_register(Register reg)
@@ -411,8 +407,8 @@ static void issue_warnings(unsigned int C, Register reg)
             An instance of the Register struct containing information about the 
             qubit register.
         
-        Assets *assets
-            Contains the necessary matrices and vectors.
+        gsl_spmatrix_char *mat
+            The sparse matrix to operate, in compressed row format.
         
         double scale
             A scalar by which to scale the matrix-vector product. For example, when
@@ -431,11 +427,10 @@ static void issue_warnings(unsigned int C, Register reg)
         has been adapted to be able to multiply complex elements.
 
  ****************************************************************************************/
-static void operate_matrix(Register reg, GateMatrices matrices, double scale, gsl_complex alt_element)
+static void operate_matrix(Register reg, gsl_spmatrix_char *mat, double scale, gsl_complex alt_element)
 {
     gsl_vector_complex *n_state;    /* To prevent repeated pointer dereference. */
     gsl_vector_complex *c_state;    /* To prevent repeated pointer dereference. */
-    gsl_spmatrix_char *mat;         /* To prevent repeated pointer dereference. */
     int stride;                     /* Stride of state vectors. */
     double c_real;                  /* Real part of current state element. */
     double c_imag;                  /* Imaginary part of current state element. */
@@ -445,7 +440,6 @@ static void operate_matrix(Register reg, GateMatrices matrices, double scale, gs
     n_state = *reg.new_state;       /* Dereference new_state double pointer. */
     c_state = *reg.current_state;   /* Dereference current_state double pointer. */
     stride = c_state->stride;       /* Assuming strides of current state and new state are equal. */
-    mat = matrices.result_matrix;
 
     /* Reset new_state to zero. */
     gsl_vector_complex_set_zero(n_state);
@@ -502,8 +496,8 @@ static void operate_matrix(Register reg, GateMatrices matrices, double scale, gs
             An instance of the Register struct containing information about the qubit
             register.
         
-        Assets *assets
-            Contains the necessary matrices and vectors.
+        GateMatrices matrices
+            Contains the sparse matrices to build and operate with.
 
     Notes:
         The construction of the matrix is as per the instruction in the cited Candela
@@ -553,7 +547,7 @@ static void hadamard_gate(unsigned int qubit_num, Register reg, GateMatrices mat
     compress_comp_matrix(matrices);
 
     /* With the Hadamard matrix built and compressed, operate the matrix with the scale 1/sqrt(2). */
-    operate_matrix(reg, matrices, HADAMARD_SCALE, NULL_ALT_ELEMENT);
+    operate_matrix(reg, matrices.result_matrix, HADAMARD_SCALE, NULL_ALT_ELEMENT);
 }
 
 
@@ -576,8 +570,8 @@ static void hadamard_gate(unsigned int qubit_num, Register reg, GateMatrices mat
             An instance of the Register struct containing information about the qubit
             register.
         
-        Assets *assets
-            Contains the necessary matrices and vectors.
+        GateMatrices matrices
+            Contains the sparse matrices to build and operate with.
     
     Notes:
         The construction of the matrix is as per the instruction in the cited Candela
@@ -632,7 +626,7 @@ static void c_phase_shift_gate(unsigned int c_qubit_num, unsigned int qubit_num,
         With the phase shift matrix built and compressed, operate it with
         the alt_element being z = e^(i\theta).
     */
-    operate_matrix(reg, matrices, 1.0, gsl_complex_polar(1.0, theta));
+    operate_matrix(reg, matrices.result_matrix, 1.0, gsl_complex_polar(1.0, theta));
 }
 
 
@@ -656,8 +650,8 @@ static void c_phase_shift_gate(unsigned int c_qubit_num, unsigned int qubit_num,
             An instance of the Register struct containing information about the qubit
             register.
         
-        Assets *assets
-            Contains the necessary matrices and vectors.
+        GateMatrices matrices
+            Contains the sparse matrices to build and operate with.
 
     Notes:
         The construction of the matrix is as per the instruction in the cited Candela
@@ -673,7 +667,7 @@ static void c_amodc_gate(unsigned int C, unsigned long long int atox, unsigned i
     /* Compiler automatically casts A, atox and C to yield the correct A. */
     A = atox % C;
 
-    /* Using notation from instruction document, loop over rows (k) of matrix. */
+    /* Using notation from instruction document, loop over rows (k) of matrix to build it. */
     for (unsigned long int k = 0; k < reg.num_states; k++) {
 
         /* If l_0 (c_qubit_num) is 0, j = k. */
@@ -727,7 +721,7 @@ static void c_amodc_gate(unsigned int C, unsigned long long int atox, unsigned i
 
     compress_comp_matrix(matrices);
 
-    operate_matrix(reg, matrices, 1.0, NULL_ALT_ELEMENT);
+    operate_matrix(reg, matrices.result_matrix, 1.0, NULL_ALT_ELEMENT);
 }
 
 
@@ -739,8 +733,8 @@ static void c_amodc_gate(unsigned int C, unsigned long long int atox, unsigned i
             An instance of the Register struct containing information about the 
             qubit register.
 
-        Assets *assets
-            Contains the necessary matrices and vectors.
+        GateMatrices matrices
+            Contains the sparse matrices to build and operate with.
 
     Notes:
         The inverse quantum Fourier transform is peformed as per the instructions in
@@ -778,8 +772,8 @@ static void inverse_QFT(Register reg, GateMatrices matrices)
             An instance of the Register struct containing information about the 
             qubit register.
 
-        Assets *assets
-            Contains the necessary matrices and vectors.
+        GateMatrices matrices
+            Contains the sparse matrices to build and operate with.
 
  ****************************************************************************************/
 static void quantum_computation(unsigned int C, unsigned int a, Register reg, GateMatrices matrices)
@@ -971,9 +965,8 @@ static double read_omega(unsigned long int state_num, Register reg)
             Contains information regarding the qubit register, such as the size of the
             sub registers.
         
-        Assets *assets
-            Contains the matrices and state vectors needed to perform the quantum
-            computations.
+        GateMatrices matrices
+            Contains the sparse matrices to build and operate with.
         
         gsl_rng *rng
             The random number generator as implemented by GSL.
@@ -1063,9 +1056,8 @@ static ErrorCode find_period(unsigned int *period, unsigned int C, unsigned int 
             Contains information regarding the qubit register, such as the size of the
             sub registers.
         
-        Assets *assets
-            Contains the matrices and state vectors needed to perform the quantum
-            computations.
+        GateMatrices matrices
+            Contains the sparse matrices to build and operate with.
         
         gsl_rng *rng
             The random number generator as implemented by GSL.
@@ -1226,7 +1218,7 @@ static ErrorCode shors_algorithm(unsigned int factors[2], unsigned int C, unsign
             arguments.
         
         Register *reg
-            A pointer to a struct of which to populate with information about the
+            A pointer to a Register struct to populate with information about the
             quantum register, as provided by the user.
         
         unsigned int *C
@@ -1359,7 +1351,7 @@ static ErrorCode parse_command_line_args(int argc, char *argv[], Register *reg, 
  ****************************************************************************************/
 int main(int argc, char *argv[])
 {
-    GateMatrices matrices;
+    GateMatrices matrices;              /* Contains sparse matrices to build, compress and operate. */
     Register reg;                       /* Contains information regarding the qubit register. */
     ErrorCode error;                    /* Return code of the program. */
     const gsl_rng_type *rng_type;       /* The type of rng used in the program. Default is Mersenne twister. */
