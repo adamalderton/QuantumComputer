@@ -170,14 +170,25 @@ typedef enum {
 } ErrorCode;
 
 /*
-    Struct to store vectors and matrices relevant to the program.
+    Struct to store matrices relevant to the program.
 
     Stored are two matrices, result_matrix and comp_matrix. Within this program,
     matrices are constructed within comp_matrix which is a sparse matrix of the
     coordinate type, and comp_matrix is then compressed into result_matrix by the
     function compress_comp_matrix(). The result matrix is then used in matrix-vector
-    multiplications as its compressed column format is more efficient for matrix-vector
+    multiplications as its compressed row format is more efficient for matrix-vector
     multiplications, especially for large matrices.
+*/
+typedef struct {
+    gsl_spmatrix_char *result_matrix;
+    gsl_spmatrix_char *comp_matrix;
+} GateMatrices;
+
+/*
+    A struct containing details of the qubit register, and its sub-registers L and M.
+    Please see the 'Candela' reference cited for details on these separate registers.
+    The number of qubits is also stored, and the corresponding number of states which
+    is simply 2^(num_qubits).
 
     Also stored are two complex vectors state_a and state_b. These hold the vectorised
     form of the wavefunction. Two must be stored as many of the calculations carried out
@@ -195,25 +206,14 @@ typedef enum {
     current_state and new_state should be dereferenced to give the necessary vectors.
 */
 typedef struct {
-    gsl_vector_complex **current_state;
-    gsl_vector_complex **new_state;
-    gsl_vector_complex *state_a;
-    gsl_vector_complex *state_b;
-    gsl_spmatrix_char *result_matrix;
-    gsl_spmatrix_char *comp_matrix;
-} Assets;
-
-/*
-    A struct containing details of the qubit register, and its sub-registers L and M.
-    Please see the 'Candela' reference cited for details on these separate registers.
-    The number of qubits is also stored, and the corresponding number of states which
-    is simply 2^(num_qubits).
-*/
-typedef struct {
     int L_size;     /* Signed as to be able to handle invalid command line argument. */
     int M_size;     /* Signed as to be able to handle invalid command line argument. */
     unsigned int num_qubits;
     unsigned long int num_states;
+    gsl_vector_complex **current_state;
+    gsl_vector_complex **new_state;
+    gsl_vector_complex *state_a;
+    gsl_vector_complex *state_b;
 } Register;
 
 /* 
@@ -260,13 +260,13 @@ bool very_verbose = false;
             Contains comp_matrix and result_matrix pointers.
 
  ****************************************************************************************/
-static void compress_comp_matrix(Assets *assets)
+static void compress_comp_matrix(GateMatrices matrices)
 {
     /* Compress comp_matrix into result_matrix in compressed column format. */
-    gsl_spmatrix_char_csr(assets->result_matrix, assets->comp_matrix);
+    gsl_spmatrix_char_csr(matrices.result_matrix, matrices.comp_matrix);
 
     /* Reset comp_matrix straight away as to reduce memory bloat. */
-    gsl_spmatrix_char_set_zero(assets->comp_matrix);
+    gsl_spmatrix_char_set_zero(matrices.comp_matrix);
 }
 
 
@@ -279,13 +279,13 @@ static void compress_comp_matrix(Assets *assets)
             Contains current_state, new_state, state_a and state_b.
 
  ****************************************************************************************/
-static void swap_states(Assets *assets)
+static void swap_states(Register *reg)
 {
     gsl_vector_complex **temp;
 
-    temp = assets->new_state;
-    assets->new_state = assets->current_state;
-    assets->current_state = temp;
+    temp = reg->new_state;
+    reg->new_state = reg->current_state;
+    reg->current_state = temp;
 }
 
 
@@ -312,14 +312,14 @@ static void swap_states(Assets *assets)
             register.
 
  ****************************************************************************************/
-static unsigned long int measure_state(Register reg, Assets *assets, gsl_rng *rng)
+static unsigned long int measure_state(Register reg, gsl_rng *rng)
 {
     double r;                           /* Random number between 0.0 and 1.0, used to measure the state. */
     double cumulative_prob;             /* Quantity to track the cumulative probability considered so far. */
     unsigned long int state_num;        /* The index in the state vector of the state measured. */
     gsl_vector_complex *current_state;  /* To prevent repeated pointer dereference. */
 
-    current_state = *assets->current_state;
+    current_state = *reg.current_state;
     cumulative_prob = 0.0;
     r = gsl_rng_uniform(rng);
 
@@ -358,12 +358,12 @@ static unsigned long int measure_state(Register reg, Assets *assets, gsl_rng *rn
             *assets.current_state.
 
  ****************************************************************************************/
-static void reset_register(gsl_vector_complex *current_state)
+static void reset_register(Register reg)
 {
-    gsl_vector_complex_set_zero(current_state);
+    gsl_vector_complex_set_zero(*reg.current_state);
 
     /* Sets register to |000 ... 001>. */
-    gsl_vector_complex_set(current_state, 1, gsl_complex_polar(1.0, 0.0));
+    gsl_vector_complex_set(*reg.current_state, 1, gsl_complex_polar(1.0, 0.0));
 }
 
 
@@ -431,7 +431,7 @@ static void issue_warnings(unsigned int C, Register reg)
         has been adapted to be able to multiply complex elements.
 
  ****************************************************************************************/
-static void operate_matrix(Register reg, Assets *assets, double scale, gsl_complex alt_element)
+static void operate_matrix(Register reg, GateMatrices matrices, double scale, gsl_complex alt_element)
 {
     gsl_vector_complex *n_state;    /* To prevent repeated pointer dereference. */
     gsl_vector_complex *c_state;    /* To prevent repeated pointer dereference. */
@@ -442,10 +442,10 @@ static void operate_matrix(Register reg, Assets *assets, double scale, gsl_compl
     double m_real;                  /* Real part of matrix element. */
     double m_imag;                  /* Imaginary part of matrix element. */
 
-    n_state = *assets->new_state;
-    c_state = *assets->current_state;
+    n_state = *reg.new_state;       /* Dereference new_state double pointer. */
+    c_state = *reg.current_state;   /* Dereference current_state double pointer. */
     stride = c_state->stride;       /* Assuming strides of current state and new state are equal. */
-    mat = assets->result_matrix;
+    mat = matrices.result_matrix;
 
     /* Reset new_state to zero. */
     gsl_vector_complex_set_zero(n_state);
@@ -486,7 +486,7 @@ static void operate_matrix(Register reg, Assets *assets, double scale, gsl_compl
     }
 
     /* The result is stored in new_state, so complete by storing the result in current_state instead. */
-    swap_states(assets);
+    swap_states(&reg);
 }
 
 
@@ -510,7 +510,7 @@ static void operate_matrix(Register reg, Assets *assets, double scale, gsl_compl
         reference.
 
  ****************************************************************************************/
-static void hadamard_gate(unsigned int qubit_num, Register reg, Assets *assets)
+static void hadamard_gate(unsigned int qubit_num, Register reg, GateMatrices matrices)
 {
     /* 
         Holds the result of the bitwise not operation applied to the 
@@ -544,16 +544,16 @@ static void hadamard_gate(unsigned int qubit_num, Register reg, Assets *assets)
                 element = HADAMARD_BASE_MATRIX[GET_BIT(i, qubit_num)][GET_BIT(j, qubit_num)];
 
                 /* Insert element in comp_matrix. */
-                gsl_spmatrix_char_set(assets->comp_matrix, i, j, element);
+                gsl_spmatrix_char_set(matrices.comp_matrix, i, j, element);
             }
         }
     }
 
     /* Compress comp_matrix into result_matrix for efficient multiplication. */
-    compress_comp_matrix(assets);
+    compress_comp_matrix(matrices);
 
     /* With the Hadamard matrix built and compressed, operate the matrix with the scale 1/sqrt(2). */
-    operate_matrix(reg, assets, HADAMARD_SCALE, NULL_ALT_ELEMENT);
+    operate_matrix(reg, matrices, HADAMARD_SCALE, NULL_ALT_ELEMENT);
 }
 
 
@@ -584,7 +584,7 @@ static void hadamard_gate(unsigned int qubit_num, Register reg, Assets *assets)
         reference.
 
  ****************************************************************************************/
-static void c_phase_shift_gate(unsigned int c_qubit_num, unsigned int qubit_num, double theta, Register reg, Assets *assets)
+static void c_phase_shift_gate(unsigned int c_qubit_num, unsigned int qubit_num, double theta, Register reg, GateMatrices matrices)
 {
     /* 
         Holds the result of the bitwise not operation applied to the 
@@ -620,19 +620,19 @@ static void c_phase_shift_gate(unsigned int c_qubit_num, unsigned int qubit_num,
                     [(2*GET_BIT(j, c_qubit_num)) + GET_BIT(j, qubit_num)];
 
                 /* Insert element in comp_matrix. */
-                gsl_spmatrix_char_set(assets->comp_matrix, i, j, element);
+                gsl_spmatrix_char_set(matrices.comp_matrix, i, j, element);
             }
         }
     }
 
     /* Compress comp_matrix into result_matrix for efficient multiplication. */
-    compress_comp_matrix(assets);
+    compress_comp_matrix(matrices);
 
     /*
         With the phase shift matrix built and compressed, operate it with
         the alt_element being z = e^(i\theta).
     */
-    operate_matrix(reg, assets, 1.0, gsl_complex_polar(1.0, theta));
+    operate_matrix(reg, matrices, 1.0, gsl_complex_polar(1.0, theta));
 }
 
 
@@ -664,7 +664,7 @@ static void c_phase_shift_gate(unsigned int c_qubit_num, unsigned int qubit_num,
         reference.
 
  ****************************************************************************************/
-static void c_amodc_gate(unsigned int C, unsigned long long int atox, unsigned int c_qubit_num, Register reg, Assets *assets)
+static void c_amodc_gate(unsigned int C, unsigned long long int atox, unsigned int c_qubit_num, Register reg, GateMatrices matrices)
 {
     unsigned int A; /* Holds a^x (mod C). */
     unsigned int j; /* The column of the matrix in row k in which the 1 resides. */
@@ -678,7 +678,7 @@ static void c_amodc_gate(unsigned int C, unsigned long long int atox, unsigned i
 
         /* If l_0 (c_qubit_num) is 0, j = k. */
         if (GET_BIT(k, c_qubit_num) == 0) {
-            gsl_spmatrix_char_set(assets->comp_matrix, k, k, 1);
+            gsl_spmatrix_char_set(matrices.comp_matrix, k, k, 1);
             continue;
         
         /* If l_0 = 1 ... */
@@ -699,7 +699,7 @@ static void c_amodc_gate(unsigned int C, unsigned long long int atox, unsigned i
              */
             if (f >= C) {
 
-                gsl_spmatrix_char_set(assets->comp_matrix, k, k, 1);
+                gsl_spmatrix_char_set(matrices.comp_matrix, k, k, 1);
                 continue;
 
             } else {
@@ -720,14 +720,14 @@ static void c_amodc_gate(unsigned int C, unsigned long long int atox, unsigned i
                     j += GET_BIT(k, b) << b;
                 }
 
-                gsl_spmatrix_char_set(assets->comp_matrix, j, k, 1);
+                gsl_spmatrix_char_set(matrices.comp_matrix, j, k, 1);
             }
         }
     }
 
-    compress_comp_matrix(assets);
+    compress_comp_matrix(matrices);
 
-    operate_matrix(reg, assets, 1.0, NULL_ALT_ELEMENT);
+    operate_matrix(reg, matrices, 1.0, NULL_ALT_ELEMENT);
 }
 
 
@@ -747,16 +747,16 @@ static void c_amodc_gate(unsigned int C, unsigned long long int atox, unsigned i
         the cited Candela reference.
 
  ****************************************************************************************/
-static void inverse_QFT(Register reg, Assets *assets)
+static void inverse_QFT(Register reg, GateMatrices matrices)
 {
     double theta;   /* The phase to apply within the phase shift gates. */
 
     for (int l = reg.L_size - 1; l >= 0; l--) {
-        hadamard_gate(l, reg, assets);
+        hadamard_gate(l, reg, matrices);
 
         for (int k = l - 1; k >= 0; k--) {
             theta = M_PI / (double) INT_POW(2, reg.L_size - k - 1);
-            c_phase_shift_gate(l, k, theta, reg, assets);
+            c_phase_shift_gate(l, k, theta, reg, matrices);
         }
     }
 }
@@ -782,7 +782,7 @@ static void inverse_QFT(Register reg, Assets *assets)
             Contains the necessary matrices and vectors.
 
  ****************************************************************************************/
-static void quantum_computation(unsigned int C, unsigned int a, Register reg, Assets *assets)
+static void quantum_computation(unsigned int C, unsigned int a, Register reg, GateMatrices matrices)
 {
     unsigned int x = 1;
 
@@ -791,7 +791,7 @@ static void quantum_computation(unsigned int C, unsigned int a, Register reg, As
         printf("         - Applying Hadamard matrices.\n");
     }
     for (unsigned int l = (reg.num_qubits - reg.L_size); l < reg.num_qubits; l++) {
-        hadamard_gate(l, reg, assets);
+        hadamard_gate(l, reg, matrices);
     }
 
     if (very_verbose) {
@@ -799,14 +799,14 @@ static void quantum_computation(unsigned int C, unsigned int a, Register reg, As
     }
     /* For each bit value in the L register, apply the conditional a^x (mod C) gate. */
     for (unsigned int l = (reg.num_qubits - reg.L_size); l < reg.num_qubits; l++) {
-        c_amodc_gate(C, INT_POW(a, x), l, reg, assets);
+        c_amodc_gate(C, INT_POW(a, x), l, reg, matrices);
         x *= 2;
     }
 
     if (very_verbose) {
         printf("         - Performing inverse quantum Fourier transform.\n");
     }
-    inverse_QFT(reg, assets);
+    inverse_QFT(reg, matrices);
 }
 
 
@@ -983,7 +983,7 @@ static double read_omega(unsigned long int state_num, Register reg)
             Describes if any errors have occured, including not finding a period.
 
  ****************************************************************************************/
-static ErrorCode find_period(unsigned int *period, unsigned int C, unsigned int a, Register reg, Assets *assets, gsl_rng *rng)
+static ErrorCode find_period(unsigned int *period, unsigned int C, unsigned int a, Register reg, GateMatrices matrices, gsl_rng *rng)
 {
     unsigned int *denominators;             /* The denominators of the fractions in the continued expansion of omega. */
     bool period_found;                      /* True if the period has been found successfully, false if not. */
@@ -993,14 +993,14 @@ static ErrorCode find_period(unsigned int *period, unsigned int C, unsigned int 
     if (very_verbose) {
         printf("      - Performing quantum computation...\n");
     }
-    reset_register(*assets->current_state);
-    quantum_computation(C, a, reg, assets);
+    reset_register(reg);
+    quantum_computation(C, a, reg, matrices);
 
     if (very_verbose) {
         printf("      - Measuring state...\n");
     }
 
-    measured_state_num = measure_state(reg, assets, rng);
+    measured_state_num = measure_state(reg, rng);
     omega = read_omega(measured_state_num, reg);
 
     if (very_verbose) {
@@ -1076,18 +1076,16 @@ static ErrorCode find_period(unsigned int *period, unsigned int C, unsigned int 
             hence a factorisation.
 
  ****************************************************************************************/
-static ErrorCode shors_algorithm(unsigned int factors[2], unsigned int C, unsigned int forced_trial_int, Register reg, Assets *assets, gsl_rng *rng)
+static ErrorCode shors_algorithm(unsigned int factors[2], unsigned int C, unsigned int forced_trial_int, Register reg, GateMatrices matrices, gsl_rng *rng)
 {
     ErrorCode error;
     unsigned int period;
-    //struct timeval tv1, tv2;                    /* Holds the start and end clock times. */
-    struct timespec start, stop;
-    double time_elapsed;                        /* Holds the time elapsed by a calculation. */
+    struct timespec start, stop; /* Used to track the start and end times of the simulation. */
+    double time_elapsed;         /* Holds the time elapsed by a simulation. */
 
     printf("\n --- Finding factors...\n\n");
 
     /* Start simulation timer. */
-    //gettimeofday(&tv1, NULL);
     clock_gettime(CLOCK_REALTIME, &start);
 
     /*
@@ -1099,7 +1097,7 @@ static ErrorCode shors_algorithm(unsigned int factors[2], unsigned int C, unsign
             printf(" --- Forced trial integer a = %d, finding period ...\n", forced_trial_int);
         }
 
-        error = find_period(&period, C, forced_trial_int, reg, assets, rng);
+        error = find_period(&period, C, forced_trial_int, reg, matrices, rng);
         if (error == PERIOD_NOT_FOUND) {
             printf(" --- A valid period was not found and hence C = %d could not be factorised.\n", C);
             return PERIOD_NOT_FOUND;
@@ -1132,12 +1130,10 @@ static ErrorCode shors_algorithm(unsigned int factors[2], unsigned int C, unsign
         }
 
         /* Stop simulation timer. */
-        //gettimeofday(&tv2, NULL);
         clock_gettime(CLOCK_REALTIME, &stop);
 
         if (verbose) {
             /* Derive time_elapsed from the timespec struct instances. */
-            //time_elapsed = ( (double) (tv2.tv_usec - tv1.tv_usec) / 1000000 ) + (double) (tv2.tv_sec - tv1.tv_sec);
             time_elapsed = (stop.tv_sec - start.tv_sec) + (stop.tv_nsec - start.tv_nsec) / 1e9;
             printf(" --- Time to run Shor's Algorithm: %.6fs.\n", time_elapsed);
         }
@@ -1154,7 +1150,7 @@ static ErrorCode shors_algorithm(unsigned int factors[2], unsigned int C, unsign
             printf(" --- Trial integer a = %d, finding period ...\n", trial_int);
         }
 
-        error = find_period(&period, C, trial_int, reg, assets, rng);
+        error = find_period(&period, C, trial_int, reg, matrices, rng);
         if (error == PERIOD_NOT_FOUND) {
             if (verbose) {
                 printf(" --- A valid period could not be found for a = %d.\n\n", trial_int);
@@ -1188,12 +1184,10 @@ static ErrorCode shors_algorithm(unsigned int factors[2], unsigned int C, unsign
         }
 
         /* Stop simulation timer. */
-        //gettimeofday(&tv2, NULL);
         clock_gettime(CLOCK_REALTIME, &stop);
 
         if (verbose) {
-            /* Derive time_elapsed from the timeval struct instances. */
-            //time_elapsed = ( (double) (tv2.tv_usec - tv1.tv_usec) / 1000000 ) + (double) (tv2.tv_sec - tv1.tv_sec);
+            /* Derive time_elapsed from the timespec struct instances. */
             time_elapsed = (stop.tv_sec - start.tv_sec) + (stop.tv_nsec - start.tv_nsec) / 1e9;
             printf(" --- Time to run Shor's Algorithm: %.6fs.\n", time_elapsed);
         }
@@ -1204,14 +1198,12 @@ static ErrorCode shors_algorithm(unsigned int factors[2], unsigned int C, unsign
     printf(" --- A valid period was not found and hence C = %d could not be factorised.\n", C);
 
     /* Stop simulation timer. */
-    //gettimeofday(&tv2, NULL);
     clock_gettime(CLOCK_REALTIME, &stop);
 
     if (verbose) {
-        /* Derive time_elapsed from the timeval struct instances. */
-            //time_elapsed = ( (double) (tv2.tv_usec - tv1.tv_usec) / 1000000 ) + (double) (tv2.tv_sec - tv1.tv_sec);
-            time_elapsed = (stop.tv_sec - start.tv_sec) + (stop.tv_nsec - start.tv_nsec) / 1e9;
-            printf(" --- Time to run Shor's Algorithm: %.6fs.\n", time_elapsed);
+        /* Derive time_elapsed from the timespec struct instances. */
+        time_elapsed = (stop.tv_sec - start.tv_sec) + (stop.tv_nsec - start.tv_nsec) / 1e9;
+        printf(" --- Time to run Shor's Algorithm: %.6fs.\n", time_elapsed);
     }
 
     return PERIOD_NOT_FOUND;
@@ -1367,7 +1359,7 @@ static ErrorCode parse_command_line_args(int argc, char *argv[], Register *reg, 
  ****************************************************************************************/
 int main(int argc, char *argv[])
 {
-    Assets assets;                      /* Contains the necessary vectors and matrices. */
+    GateMatrices matrices;
     Register reg;                       /* Contains information regarding the qubit register. */
     ErrorCode error;                    /* Return code of the program. */
     const gsl_rng_type *rng_type;       /* The type of rng used in the program. Default is Mersenne twister. */
@@ -1397,26 +1389,26 @@ int main(int argc, char *argv[])
         automatically. However, should this be turned off in future, the ALLOC_CHECK
         macro is called to check the allocation.
     */
-    assets.state_a = gsl_vector_complex_alloc(reg.num_states);
-    ALLOC_CHECK(assets.state_a);
-    assets.state_b = gsl_vector_complex_alloc(reg.num_states);
-    ALLOC_CHECK(assets.state_b);
-    assets.comp_matrix = gsl_spmatrix_char_alloc(reg.num_states, reg.num_states);
-    ALLOC_CHECK(assets.comp_matrix);
-    assets.result_matrix = gsl_spmatrix_char_alloc_nzmax(reg.num_states, reg.num_states, reg.num_states, GSL_SPMATRIX_CSR);
-    ALLOC_CHECK(assets.result_matrix);
+    reg.state_a = gsl_vector_complex_alloc(reg.num_states);
+    ALLOC_CHECK(reg.state_a);
+    reg.state_b = gsl_vector_complex_alloc(reg.num_states);
+    ALLOC_CHECK(reg.state_b);
+    matrices.comp_matrix = gsl_spmatrix_char_alloc(reg.num_states, reg.num_states);
+    ALLOC_CHECK(matrices.comp_matrix);
+    matrices.result_matrix = gsl_spmatrix_char_alloc_nzmax(reg.num_states, reg.num_states, reg.num_states, GSL_SPMATRIX_CSR);
+    ALLOC_CHECK(matrices.result_matrix);
 
-    assets.current_state = &assets.state_a;
-    assets.new_state = &assets.state_b;
+    reg.current_state = &reg.state_a;
+    reg.new_state = &reg.state_b;
 
     /* With the setup complete, execute Shor's algorithm. */
-    error = shors_algorithm(factors, C, forced_trial_int, reg, &assets, rng);
+    error = shors_algorithm(factors, C, forced_trial_int, reg, matrices, rng);
 
     /* Cleanup. */
-    gsl_vector_complex_free(assets.state_a);
-    gsl_vector_complex_free(assets.state_b);
-    gsl_spmatrix_char_free(assets.result_matrix);
-    gsl_spmatrix_char_free(assets.comp_matrix);
+    gsl_vector_complex_free(reg.state_a);
+    gsl_vector_complex_free(reg.state_b);
+    gsl_spmatrix_char_free(matrices.result_matrix);
+    gsl_spmatrix_char_free(matrices.comp_matrix);
     gsl_rng_free(rng);
 
     if (error == NO_ERROR) {
