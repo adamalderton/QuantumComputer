@@ -59,6 +59,13 @@
         However, with competance and some knowledge of Shor's algorithm, no issues should
         be met.
     
+        The absolute maximum of qubits that can be considered by this program is 32, as 
+        governed by the amount of bits in the unsigned long type. However, this is an
+        incredibly large number of qubits such that the simulation of this many qubits is
+        simply unfeasible. If for some reason this needed to be extended, the unsigned
+        long long int datatype would be able to consider 64 qubits when building the
+        quantum gate matrices.
+
     Notes
         The program will display warnings for when the register sizes are not above certain
         limits, which provide confidence in finding periods. However, in many cases, the
@@ -1097,7 +1104,7 @@ static ErrorCode shors_algorithm(unsigned int factors[2], unsigned int C, unsign
             printf(" --- A valid period was not found and hence C = %d could not be factorised.\n", C);
             return PERIOD_NOT_FOUND;
 
-        } else if (INT_POW(forced_trial_int, period / 2) % C == -1) {
+        } else if (INT_POW(forced_trial_int, period / 2) % C == C - 1) {
             if (verbose) {
                 printf(" --- Period was found to be %d, but it did not pass the validity requirements\n", period);
             }
@@ -1141,7 +1148,8 @@ static ErrorCode shors_algorithm(unsigned int factors[2], unsigned int C, unsign
                 printf(" --- Period was found to be %d, but it did not pass the validity requirements.\n\n", period);
             }
             continue;
-        } else if (INT_POW(trial_int, period / 2) % C == -1) {
+
+        } else if (INT_POW(forced_trial_int, period / 2) % C == C - 1) {
             if (verbose) {
                 printf(" --- Period was found to be %d, but it did not pass the validity requirements.\n\n", period);
             }
