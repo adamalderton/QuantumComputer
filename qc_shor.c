@@ -1372,6 +1372,9 @@ int main(int argc, char *argv[])
 
     if (error == NO_ERROR) {
         fprintf(stdout, " --- Factors of %d found: (%d, %d).\n", C, factors[0], factors[1]);
+        if (C / factors[0] != factors[1]) {
+            fprintf(stdout, " --- These factors are incorrect. Consider increasing register sizes as per the warnings.\n");
+        }
     } else if (error == PERIOD_NOT_FOUND) {
         /* Error messages displayed within shors_algorithm(). */
         return PERIOD_NOT_FOUND;
