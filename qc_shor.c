@@ -265,7 +265,7 @@ static void compress_build_matrix(GateMatrices matrices)
     /* Compress build_matrix into csr_matrix in compressed column format. */
     gsl_spmatrix_char_csr(matrices.csr_matrix, matrices.build_matrix);
 
-    /* Reset build_matrix straight away as to reduce memory bloat. */
+    /* Reset build_matrix. */
     gsl_spmatrix_char_set_zero(matrices.build_matrix);
 }
 
