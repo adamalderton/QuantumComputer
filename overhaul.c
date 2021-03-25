@@ -15,6 +15,7 @@
 #include <gsl/gsl_math.h>
 
 #define HADAMARD_SCALE 1.0/M_SQRT2
+#define COMPLEX_ELEMENT -DBL_MAX
 
 #define GET_BIT(integer, n) \
     ( (integer & (1 << n)) >> n )
@@ -33,9 +34,22 @@ typedef struct {
     gsl_vector_complex *state_b;
 } Register;
 
+/* Stored as doubles as to prevent frequent unneccessary casting. */
 const double HADAMARD_BASE_MATRIX[2][2] = {
     {M_SQRT1_2, M_SQRT1_2},
     {M_SQRT1_2, -M_SQRT1_2}
+};
+
+const double C_PHASE_SHIFT_BASE_MATRIX[4][4] = {
+    {1.0, 0.0, 0.0, 0.0},
+    {0.0, 1.0, 0.0, 0.0},
+    {0.0, 0.0, 1.0, 0.0},
+    {0.0, 0.0, 0.0, COMPLEX_ELEMENT}
+};
+
+const double PHASE_BASE[2][2] = {
+    {1.0, 0.0},
+    {0.0, COMPLEX_ELEMENT}
 };
 
 static void swap_states(Register *reg)
@@ -119,6 +133,107 @@ static void operate_matrix(gsl_spmatrix_complex *matrix, Register *reg)
     swap_states(reg);
 }
 
+static void c_phase_shift_gate(unsigned int c_qubit_num, unsigned int qubit_num, double theta, gsl_spmatrix_complex *matrix, Register *reg)
+{
+    /* 
+        Holds the result of the bitwise not operation applied to the 
+        result of the bitwise xor operation between the matrix indices i and j
+    */
+    unsigned long int not_xor_ij;
+    double base_matrix_element;
+    gsl_complex element;                   /* Element of phase shift matrix. */
+    bool dirac_deltas_non_zero;     /* Determines whether any of the dirac deltas are zero or not. */
+
+    /* Iterate over all possible elements of the matrix. */
+    for (unsigned long int i = 0; i < reg->num_states; i++) {
+        for (unsigned long int j = 0; j < reg->num_states; j++) {
+            dirac_deltas_non_zero = true;
+
+            not_xor_ij = ~(i ^ j);
+
+            /* Check that all of the dirac-deltas are 1 before proceeding. */
+            for (unsigned int b = 0; b < reg->num_qubits; b++) {
+
+                if ( (b != qubit_num) && (b != c_qubit_num) ) {
+                    if (GET_BIT(not_xor_ij, b) == 0) {
+                        dirac_deltas_non_zero = false;
+                        break;
+                    }
+                }
+            }
+
+            if (dirac_deltas_non_zero) {
+
+                /* Retrieve element from base matrix. */
+                base_matrix_element = C_PHASE_SHIFT_BASE_MATRIX
+                    [(2*GET_BIT(i, c_qubit_num)) + GET_BIT(i, qubit_num)]
+                    [(2*GET_BIT(j, c_qubit_num)) + GET_BIT(j, qubit_num)];
+                
+                if (base_matrix_element == COMPLEX_ELEMENT) {
+                    element = gsl_complex_polar(1.0, theta);
+                } else {
+                    GSL_SET_COMPLEX(&element, base_matrix_element, 0.0);
+                }
+
+                /* Insert element in build_matrix. */
+                gsl_spmatrix_complex_set(matrix, i, j, element);
+            }
+        }
+    }
+
+    operate_matrix(matrix, reg);
+}
+
+static void phase_gate(unsigned int qubit_num, double theta, gsl_spmatrix_complex *matrix, Register *reg)
+{
+    /* 
+        Holds the result of the bitwise not operation applied to the 
+        result of the bitwise xor operation between the matrix indices i and j
+    */
+    unsigned long int not_xor_ij;
+    double base_matrix_element;
+    gsl_complex element;                   /* Element of phase shift matrix. */
+    bool dirac_deltas_non_zero;     /* Determines whether any of the dirac deltas are zero or not. */
+
+    /* Iterate over all possible elements of the matrix. */
+    for (unsigned long int i = 0; i < reg->num_states; i++) {
+        for (unsigned long int j = 0; j < reg->num_states; j++) {
+            dirac_deltas_non_zero = true;
+
+            not_xor_ij = ~(i ^ j);
+
+            /* Check that all of the dirac-deltas are 1 before proceeding. */
+            for (unsigned int b = 0; b < reg->num_qubits; b++) {
+
+                if (b != qubit_num) {
+                    if (GET_BIT(not_xor_ij, b) == 0) {
+                        dirac_deltas_non_zero = false;
+                        break;
+                    }
+                }
+            }
+
+            if (dirac_deltas_non_zero) {
+
+                /* Retrieve element from base matrix. */
+                base_matrix_element = PHASE_BASE[GET_BIT(i, qubit_num)][GET_BIT(j, qubit_num)];
+
+                
+                if (base_matrix_element == COMPLEX_ELEMENT) {
+                    element = gsl_complex_polar(1.0, theta);
+                } else {
+                    GSL_SET_COMPLEX(&element, base_matrix_element, 0.0);
+                }
+
+                /* Insert element in build_matrix. */
+                gsl_spmatrix_complex_set(matrix, i, j, element);
+            }
+        }
+    }
+
+    operate_matrix(matrix, reg);
+}
+
 static void hadamard_gate(unsigned int qubit_num, gsl_spmatrix_complex *matrix, Register *reg)
 {
     /* 
@@ -184,8 +299,8 @@ int main()
     /**********************/
 
     hadamard_gate(0, matrix, &reg);
-    hadamard_gate(1, matrix, &reg);
-    hadamard_gate(2, matrix, &reg);
+    phase_gate(0, M_PI, matrix, &reg);
+    hadamard_gate(0, matrix, &reg);
 
     display_state(*reg.current_state, reg);
 
