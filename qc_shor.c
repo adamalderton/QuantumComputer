@@ -230,55 +230,6 @@ bool very_verbose = false;
 
 /********** UTILITY FUNCTIONS **********/
 
-static void display_state(Register reg)
-{
-    double prob;
-    int x;
-    int fx;
-
-    for (int i = 0; i < reg.num_states; i++) {
-
-        prob = gsl_complex_abs(gsl_vector_complex_get(*reg.current_state, i));
-        x = 0;
-        fx = 0;
-
-        if (prob != 0.0) {
-
-            printf("|");
-            for (int b = reg.num_qubits - 1; b >= 0; b--) {
-                printf("%d", GET_BIT(i, b));
-            }
-            printf("> ");
-
-            printf("%.2f, ", prob);
-
-            x += GET_BIT(i, 7) << 3;
-            x += GET_BIT(i, 6) << 2;
-            x += GET_BIT(i, 5) << 1;
-            x += GET_BIT(i, 4) << 0;
-
-            fx += GET_BIT(i, 0) << 0;
-            fx += GET_BIT(i, 1) << 1;
-            fx += GET_BIT(i, 2) << 2;
-            fx += GET_BIT(i, 3) << 3;
-
-            printf("num = %d, x = %d, f(x) = %d, Correct f(x) = %d\n", i, x, fx, INT_POW(7, x) % 15);
-        }
-    }
-}
-
-static void check_normalisation(Register reg)
-{
-    double sum_of_sq = 0.0;
-
-    for (unsigned int i = 0; i < reg.num_states; i++) {
-        sum_of_sq += gsl_complex_abs2(gsl_vector_complex_get(*reg.current_state, i));
-    }
-
-    printf("NORM: %.5f\n", sum_of_sq);
-
-}
-
 /****************************************************************************************
     swap_states -- Swaps the pointers current_state and new_state between state_a
                    and state_b.
