@@ -22,6 +22,12 @@
             gcc qc_shor.c -Wall -IC:[include directory] -LC:[lib directory] -lgsl -lgslcblas -lm -o qc_shor.exe
 
     Usage
+        Example:
+            ./qc_shor.exe -C 33 -L 5 -M 5 -f 7
+
+            This example should factorise 33 into 3 and 11, using 10 qubits and using 7
+            as the forced trial integer.
+
         Mandatory command line arguments:
             -C [positive integer]
                 The number to be factorised by the program.
@@ -62,7 +68,7 @@
         The absolute maximum of qubits that can be considered by this program is 32, as 
         governed by the amount of bits in the unsigned long type. However, this is an
         incredibly large number of qubits such that the simulation of this many qubits is
-        simply unfeasible. If for some reason this needed to be extended, the unsigned
+        quite unfeasible. If for some reason this needed to be extended, the unsigned
         long long int datatype would be able to consider 64 qubits when building the
         quantum gate matrices.
 
@@ -108,14 +114,8 @@
 #define VERSION "1.0.3"
 #define REVISION_DATE "21/03/2021"
 
-/* Used to correctly scale Hadamard matrices which is otherwise a matrix of integers. */
-#define HADAMARD_SCALE 1.0/M_SQRT2
-
-/* Used to inform operate_matrix() that no alternative complex element is needed. */
-#define NULL_ALT_ELEMENT gsl_complex_rect(0.0, 0.0)
-
-/* Used to inform operate_matrix() that a complex element is needed in place of this element. */
-#define COMPLEX_ELEMENT -127
+/* Used to insert complex elements into otherwise real matrices. */
+#define COMPLEX_ELEMENT -DBL_MAX
 
 /* Defines the extent to which the continued fraction expansion is analysed. */
 #define NUM_CONTINUED_FRACTIONS 15
@@ -209,13 +209,9 @@ const double HADAMARD_BASE_MATRIX[2][2] = {
 };
 
 /*
-    A basis matrix used in the contruction of phase-shift gate matrices.
+    A basis matrix used in the contruction of conditional phase-shift gate matrices.
 
-    The matrices in this program do not store complex numbers in the interest of memory,
-    so COMPLEX_ELEMENT is a placeholder for what will be a complex value. COMPLEX_ELEMENT
-    is checked for in the operate_matrix() function in which the complex element which
-    COMPLEX_ELEMENT is representing can be passed. In the case of the phase shift matrix,
-    this complex element is z = r * e^(i\theta).
+    The COMPLEX_ELEMENT quantity is used here to mark elements which are not purely real.
 */
 const double C_PHASE_SHIFT_BASE_MATRIX[4][4] = {
     {1.0, 0.0, 0.0, 0.0},
@@ -236,7 +232,7 @@ bool very_verbose = false;
     
     Parameters:
         Register *reg
-            Contains current_state, new_state double pointers, which are swapped.
+            Contains current_state, new_state double pointers which are swapped.
 
  ****************************************************************************************/
 static void swap_states(Register *reg)
@@ -278,7 +274,7 @@ static unsigned long int measure_state(Register reg, gsl_rng *rng)
 
     current_state = *reg.current_state;
     cumulative_prob = 0.0;
-    r = gsl_rng_uniform(rng);
+    r = gsl_rng_uniform(rng); /* Generate random number. */
 
     for (state_num = 0; state_num < (reg.num_states - 1); state_num++) {
 
@@ -293,10 +289,11 @@ static unsigned long int measure_state(Register reg, gsl_rng *rng)
 
     /* 
         Now, set current_state to be the collapsed state.
-        That is, set the state_num'th state to have a probability of 1.
+        That is, set the state_num'th state to have a probability of 1 and all
+        the others to have a probability of 0.
 
-        This step could be omitted if one wanted to repeatedly measure this state,
-        but this is not in the spirit of true quantum mechanics hence quantum computers.
+        This step could be omitted if one wanted to repeatedly measure this state with re-doing
+        the computation but this is not in the spirit of true quantum mechanics hence quantum computers.
      */
     gsl_vector_complex_set_zero(current_state);
     gsl_vector_complex_set(current_state, state_num, gsl_complex_rect(1.0, 0.0));
@@ -338,10 +335,6 @@ static void reset_register(Register reg)
  ****************************************************************************************/
 static void issue_warnings(unsigned int C, Register reg)
 {
-    if (C % 2 == 0) {
-        printf(" --- *WARNING* Number to factorise C = %d is even, results may be unreliable.\n", C);
-    }
-
     /* To find valid factors, 2^M must be greater than or equal to C. */
     if (INT_POW(2, reg.M_size) < C) {
         printf(" --- *WARNING* The M register is not large enough for reliable results. Ensure 2^M >= C. Minimum: M = %d.\n", ((int) (log2(C) + 0.5)) + 1);
@@ -358,51 +351,32 @@ static void issue_warnings(unsigned int C, Register reg)
 
 
 /****************************************************************************************
-    operate_matrix -- With a matrix built and compressed in assets.csr_matrix,
-                      operate it on the vector wavefunction *assets.current_state.
-                      The result is stored in *assets.current_state.
+    operate_matrix -- With a complex sparse matrix built in matrix, operate it on
+                      the current state of the register stored in *reg->current_state.
+                      The result of the calcuation is stored int *reg->current_state.
     
     Parameters:
-        Register reg
-            An instance of the Register struct containing information about the 
-            qubit register.
+        Register *reg
+            A pointer to the qubit register which contains the states to be operated on.
         
-        gsl_spmatrix_char *mat
-            The sparse matrix to operate, in compressed row format.
-        
-        double scale
-            A scalar by which to scale the matrix-vector product. For example, when
-            using the Hadamard matrix, a scale of 1/sqrt(2) should be used as it is
-            stored as integers.
-        
-        gsl_complex alt_element
-            An alternative complex matrix element to be used in the matrix-vector
-            multiplication. For example, when applying the phase_shift matrix,
-            COMPLEX_ELEMENT is substituted for z = r * e^(i\theta).
-    
-    Notes:
-        Credit for the workings of the sparse matrix-vector multiplication should be
-        given to the GSL source code 
-        (https://github.com/ampl/gsl/blob/master/spblas/spdgemv.c). Their implementation
-        has been adapted to be able to multiply complex elements.
+        gsl_spmatrix_complex *matrix
+            The complex sparse matrix to operate.
 
  ****************************************************************************************/
 static void operate_matrix(gsl_spmatrix_complex *matrix, Register *reg)
 {
-    //gsl_blas_zgemv(CblasNoTrans, gsl_complex_rect(1.0, 0.0), matrix, *reg.current_state, gsl_complex_rect(0.0, 0.0), *reg.new_state);
+    double *current_state_data; /* To prevent repeated pointer dereference. */
+    double *new_state_data;     /* To prevent repeated pointer dereference. */
+    double *matrix_data;        /* To prevent repeated pointer dereference. */
+    int *element_rows;          /* To prevent repeated pointer dereference. */
+    int *element_cols;          /* To prevent repeated pointer dereference. */
 
-    double *current_state_data;
-    double *new_state_data;
-    double *matrix_data;
-    int *element_rows;
-    int *element_cols;
-
-    unsigned int row;
-    unsigned int col;
-    double matrix_real;
-    double matrix_imag;
-    double current_real;
-    double current_imag;
+    unsigned int row;           /* Contains the row in which the current element under consideration is in. */
+    unsigned int col;           /* Contains the column in which the current element under consideration is in. */
+    double matrix_real;         /* Real part of matrix element. */
+    double matrix_imag;         /* Imaginary part of matrix element. */
+    double current_real;        /* Real part of current_state element. */
+    double current_imag;        /* Imaginary part of current_state element. */
 
     current_state_data = (*reg->current_state)->data;
     new_state_data = (*reg->new_state)->data;
@@ -411,6 +385,7 @@ static void operate_matrix(gsl_spmatrix_complex *matrix, Register *reg)
     element_rows = matrix->i;
     element_cols = matrix->p;
 
+    /* Reset new state to zero. */
     gsl_vector_complex_set_zero(*reg->new_state);
 
     /* Loop over non-zero (nz) elements. */
@@ -418,18 +393,25 @@ static void operate_matrix(gsl_spmatrix_complex *matrix, Register *reg)
         row = element_rows[nz];
         col = element_cols[nz];
 
+        /* Extract matrix element. */
         matrix_real = matrix_data[2 * nz];
         matrix_imag = matrix_data[2 * nz + 1];
 
+        /* Extract current state element. */
         current_real = current_state_data[2 * col];
         current_imag = current_state_data[2 * col + 1];
 
+        /* Real part of new state element. */
         new_state_data[2 * row] += (matrix_real * current_real) - (matrix_imag * current_imag);
+
+        /* Imaginary part of new state element. */
         new_state_data[2 * row + 1] += (matrix_real * current_imag) + (matrix_imag * current_real);
     }
 
+    /* Reset matrix in preparation for the next calcuation. */
     gsl_spmatrix_complex_set_zero(matrix);
 
+    /* Ensure result is stored in current state on completion. */
     swap_states(reg);
 }
 
@@ -442,12 +424,11 @@ static void operate_matrix(gsl_spmatrix_complex *matrix, Register *reg)
             The qubit number to apply the Hadamard gate to. Note: the qubit counting
             starts at 0.
         
-        Register reg
-            An instance of the Register struct containing information about the qubit
-            register.
+        Register *reg
+            A pointer to the qubit register.
         
-        GateMatrices matrices
-            Contains the sparse matrices to build and operate with.
+        gsl_spmatrix_complex *matrix
+            An allocated sparse complex matrix in which to store the Hadamard matrix.
 
     Notes:
         The construction of the matrix is as per the instruction in the cited Candela
@@ -490,7 +471,6 @@ static void hadamard_gate(unsigned int qubit_num, Register *reg, gsl_spmatrix_co
                 /* Retrieve element from base matrix. */
                 GSL_SET_REAL(&element, HADAMARD_BASE_MATRIX[GET_BIT(i, qubit_num)][GET_BIT(j, qubit_num)]);
 
-                /* Insert element in build_matrix. */
                 gsl_spmatrix_complex_set(matrix, i, j, element);
             }
         }
@@ -515,12 +495,11 @@ static void hadamard_gate(unsigned int qubit_num, Register *reg, gsl_spmatrix_co
         double theta
             The phase shift to apply. The \theta in z = r* e^(i\theta).
         
-        Register reg
-            An instance of the Register struct containing information about the qubit
-            register.
+        Register *reg
+            A pointer to the qubit register.
         
-        GateMatrices matrices
-            Contains the sparse matrices to build and operate with.
+        gsl_spmatrix_complex *matrix
+            An allocated sparse complex matrix in which to store the phase-shift matrix.
     
     Notes:
         The construction of the matrix is as per the instruction in the cited Candela
@@ -536,9 +515,9 @@ static void c_phase_shift_gate(unsigned int c_qubit_num, unsigned int qubit_num,
     unsigned long int not_xor_ij;
     bool dirac_deltas_non_zero;     /* Determines whether any of the dirac deltas are zero or not. */
 
-    double base_matrix_element;
-    gsl_complex e_i_theta;
-    gsl_complex element;                   /* Element of phase shift matrix. */
+    double base_matrix_element;     /* Used to extract element from C_PHASE_SHIFT_BASE_MATRIX. */
+    gsl_complex e_i_theta;          /* z = e^{i\theta}, as per the phase shift matrix. */
+    gsl_complex element;            /* Element of phase shift matrix. */
 
     e_i_theta = gsl_complex_polar(1.0, theta);
 
@@ -573,7 +552,6 @@ static void c_phase_shift_gate(unsigned int c_qubit_num, unsigned int qubit_num,
                     GSL_SET_COMPLEX(&element, base_matrix_element, 0.0);
                 }
 
-                /* Insert element in build_matrix. */
                 gsl_spmatrix_complex_set(matrix, i, j, element);
             }
         }
@@ -599,12 +577,11 @@ static void c_phase_shift_gate(unsigned int c_qubit_num, unsigned int qubit_num,
         unsigned int c_qubit_num
             The conditional qubit num with which to determine the application of f(x).
         
-        Register reg
-            An instance of the Register struct containing information about the qubit
-            register.
+        Register *reg
+            A pointer to the qubit register.
         
-        GateMatrices matrices
-            Contains the sparse matrices to build and operate with.
+        gsl_spmatrix_complex *matrix
+            An allocated sparse complex matrix in which to store the a^x (mod C) matrix.
 
     Notes:
         The construction of the matrix is as per the instruction in the cited Candela
@@ -613,11 +590,12 @@ static void c_phase_shift_gate(unsigned int c_qubit_num, unsigned int qubit_num,
  ****************************************************************************************/
 static void c_amodc_gate(unsigned int C, unsigned long long int atox, unsigned int c_qubit_num, Register *reg, gsl_spmatrix_complex *matrix)
 {
-    gsl_complex complex_1 = gsl_complex_rect(1.0, 0.0);
+    gsl_complex complex_1;  /* The complex representation of 1, to be inserted in the matrix. */
+    unsigned int A;         /* Holds a^x (mod C). */
+    unsigned int j;         /* The column of the matrix in row k in which the 1 resides. */
+    unsigned int f;         /* Used in the calculation of the permutation matrix. */
 
-    unsigned int A; /* Holds a^x (mod C). */
-    unsigned int j; /* The column of the matrix in row k in which the 1 resides. */
-    unsigned int f; /* Used in the calculation of the permutation matrix. */
+    complex_1 = gsl_complex_rect(1.0, 0.0);
 
     /* Compiler automatically casts A, atox and C to yield the correct A. */
     A = atox % C;
@@ -682,12 +660,11 @@ static void c_amodc_gate(unsigned int C, unsigned long long int atox, unsigned i
     inverse_QFT -- Perform an inverse quantum Fourier transform on the L register.
     
     Parameters:
-        Register reg
-            An instance of the Register struct containing information about the 
-            qubit register.
-
-        GateMatrices matrices
-            Contains the sparse matrices to build and operate with.
+        Register *reg
+            A pointer to the qubit register.
+        
+        gsl_spmatrix_complex *matrix
+            An allocated sparse complex matrix.
 
     Notes:
         The inverse quantum Fourier transform is peformed as per the instructions in
@@ -721,17 +698,16 @@ static void inverse_QFT(Register *reg, gsl_spmatrix_complex *matrix)
             The current trial integer within Shor's algorithm, as per the Candela
             reference.
 
-        Register reg
-            An instance of the Register struct containing information about the 
-            qubit register.
-
-        GateMatrices matrices
-            Contains the sparse matrices to build and operate with.
+        Register *reg
+            A pointer to the qubit register.
+        
+        gsl_spmatrix_complex *matrix
+            An allocated sparse complex matrix in which to store the a^x (mod C) matrix.
 
  ****************************************************************************************/
 static void quantum_computation(unsigned int C, unsigned int a, Register *reg, gsl_spmatrix_complex *matrix)
 {
-    unsigned int x = 1;
+    unsigned int x = 1; /* The x in f(x) = a^x (mod C). */
 
     /* Apply Hadamard gate to qubits in the L register. */
     if (very_verbose) {
@@ -762,7 +738,7 @@ static void quantum_computation(unsigned int C, unsigned int a, Register *reg, g
 
 /****************************************************************************************
     greatest_common_divisor -- Find the greatest common divisor between two integers
-                               using an iteration of Euclid's algorithm.
+                               using an iterative version of Euclid's algorithm.
     
     Parameters:
         unsigned int a
@@ -915,12 +891,11 @@ static double read_omega(unsigned long int state_num, Register reg)
             The trial integer passed to the period finding algorithm, as per the
             notation in the Candela reference.
         
-        Register reg
-            Contains information regarding the qubit register, such as the size of the
-            sub registers.
+        Register *reg
+            A pointer to the qubit register.
         
-        GateMatrices matrices
-            Contains the sparse matrices to build and operate with.
+        gsl_spmatrix_complex *matrix
+            An allocated sparse complex matrix.
         
         gsl_rng *rng
             The random number generator as implemented by GSL.
@@ -964,6 +939,7 @@ static ErrorCode find_period(unsigned int *period, unsigned int C, unsigned int 
         for (unsigned int m = 1; m < TRIALS_PER_DENOMINATOR + 1; m++) { /* m => multiple. */
             *period = m * denominators[d];
 
+            /* a^p = 1 (mod C) is the valid period condition. */
             if (INT_POW(a, *period) % C == 1 ) {
                 period_found = true;
                 break;
@@ -1005,13 +981,12 @@ static ErrorCode find_period(unsigned int *period, unsigned int C, unsigned int 
             If this quantity is non-zero an attempt to find the period is made 
             with only this as the trial integer. If this quantity is 0, the possible
             trial integers are looped over until a period is found.
+
+        Register *reg
+            A pointer to the qubit register.
         
-        Register reg
-            Contains information regarding the qubit register, such as the size of the
-            sub registers.
-        
-        GateMatrices matrices
-            Contains the sparse matrices to build and operate with.
+        gsl_spmatrix_complex *matrix
+            An allocated sparse complex matrix.
         
         gsl_rng *rng
             The random number generator as implemented by GSL.
@@ -1305,7 +1280,7 @@ static ErrorCode parse_command_line_args(int argc, char *argv[], Register *reg, 
  ****************************************************************************************/
 int main(int argc, char *argv[])
 {
-    gsl_spmatrix_complex *matrix;
+    gsl_spmatrix_complex *matrix;       /* Used to build and operate matrices representing gates. */
     Register reg;                       /* Contains information regarding the qubit register. */
     ErrorCode error;                    /* Return code of the program. */
     const gsl_rng_type *rng_type;       /* The type of rng used in the program. Default is Mersenne twister. */
