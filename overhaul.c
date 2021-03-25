@@ -73,7 +73,7 @@ static void display_state(gsl_vector_complex *state, Register reg)
     }
 }
 
-static void operate_matrix(gsl_spmatrix_complex *matrix, Register reg)
+static void operate_matrix(gsl_spmatrix_complex *matrix, Register *reg)
 {
     //gsl_blas_zgemv(CblasNoTrans, gsl_complex_rect(1.0, 0.0), matrix, *reg.current_state, gsl_complex_rect(0.0, 0.0), *reg.new_state);
 
@@ -90,14 +90,14 @@ static void operate_matrix(gsl_spmatrix_complex *matrix, Register reg)
     double current_real;
     double current_imag;
 
-    current_state_data = (*reg.current_state)->data;
-    new_state_data = (*reg.new_state)->data;
+    current_state_data = (*reg->current_state)->data;
+    new_state_data = (*reg->new_state)->data;
     matrix_data = matrix->data;
 
     element_rows = matrix->i;
     element_cols = matrix->p;
 
-    gsl_vector_complex_set_zero(*reg.new_state);
+    gsl_vector_complex_set_zero(*reg->new_state);
 
     /* Loop over non-zero (nz) elements. */
     for (unsigned long int nz = 0; nz < (unsigned long int) matrix->nz; nz++) {
@@ -115,9 +115,11 @@ static void operate_matrix(gsl_spmatrix_complex *matrix, Register reg)
     }
 
     gsl_spmatrix_complex_set_zero(matrix);
+
+    swap_states(reg);
 }
 
-static void hadamard_gate(unsigned int qubit_num, gsl_spmatrix_complex *matrix, Register reg)
+static void hadamard_gate(unsigned int qubit_num, gsl_spmatrix_complex *matrix, Register *reg)
 {
     /* 
         Holds the result of the bitwise not operation applied to the 
@@ -130,14 +132,14 @@ static void hadamard_gate(unsigned int qubit_num, gsl_spmatrix_complex *matrix, 
     GSL_SET_IMAG(&element, 0.0);
 
     /* Iterate over all possible elements of the matrix. */
-    for (unsigned long int i = 0; i < reg.num_states; i++) {
-        for (unsigned long int j = 0; j < reg.num_states; j++) {
+    for (unsigned long int i = 0; i < reg->num_states; i++) {
+        for (unsigned long int j = 0; j < reg->num_states; j++) {
             dirac_deltas_non_zero = true;
 
             not_xor_ij = ~(i ^ j);
 
             /* Check that all of the dirac-deltas are 1 before proceeding. */
-            for (unsigned int b = 0; b < reg.num_qubits; b++) {
+            for (unsigned int b = 0; b < reg->num_qubits; b++) {
 
                 if (b != qubit_num) {
                     if (GET_BIT(not_xor_ij, b) == 0) {
@@ -157,6 +159,8 @@ static void hadamard_gate(unsigned int qubit_num, gsl_spmatrix_complex *matrix, 
             }
         }
     }
+
+    operate_matrix(matrix, reg);
 }
 
 int main()
@@ -179,17 +183,9 @@ int main()
     gsl_vector_complex_set(*reg.current_state, 0, gsl_complex_rect(1.0, 0.0));
     /**********************/
 
-    hadamard_gate(0, matrix, reg);
-    operate_matrix(matrix, reg);
-    swap_states(&reg);
-
-    hadamard_gate(1, matrix, reg);
-    operate_matrix(matrix, reg);
-    swap_states(&reg);
-
-    hadamard_gate(2, matrix, reg);
-    operate_matrix(matrix, reg);
-    swap_states(&reg);
+    hadamard_gate(0, matrix, &reg);
+    hadamard_gate(1, matrix, &reg);
+    hadamard_gate(2, matrix, &reg);
 
     display_state(*reg.current_state, reg);
 
