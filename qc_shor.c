@@ -33,7 +33,7 @@
                 The size of the M sub-register of the qubit register.
         
         Options:
-            -i [positive integer]
+            -f [positive integer]
                 Force Shor's algorithm to use this integer only as the trial integer.
             
             -v
@@ -252,6 +252,7 @@ static void display_state(Register reg)
 
             printf("%.2f, ", prob);
 
+            x += GET_BIT(i, 7) << 3;
             x += GET_BIT(i, 6) << 2;
             x += GET_BIT(i, 5) << 1;
             x += GET_BIT(i, 4) << 0;
@@ -269,7 +270,6 @@ static void display_state(Register reg)
 static void check_normalisation(Register reg)
 {
     double sum_of_sq = 0.0;
-    display_state(reg);
 
     for (unsigned int i = 0; i < reg.num_states; i++) {
         sum_of_sq += gsl_complex_abs2(gsl_vector_complex_get(*reg.current_state, i));
@@ -278,26 +278,6 @@ static void check_normalisation(Register reg)
     printf("NORM: %.5f\n", sum_of_sq);
 
 }
-
-// /****************************************************************************************
-//     compress_build_matrix -- Compress the coordinate based build_matrix into the 
-//                             column compressed csr_matrix. build_matrix is also
-//                             zeroed out in preparation for the next matrix operation.
-    
-//     Parameters:
-//         GateMatrices matrices
-//             Contains build_matrix and csr_matrix pointers.
-
-//  ****************************************************************************************/
-// static void compress_build_matrix(GateMatrices matrices)
-// {
-//     /* Compress build_matrix into csr_matrix in compressed column format. */
-//     gsl_spmatrix_char_csr(matrices.csr_matrix, matrices.build_matrix);
-
-//     /* Reset build_matrix. */
-//     gsl_spmatrix_char_set_zero(matrices.build_matrix);
-// }
-
 
 /****************************************************************************************
     swap_states -- Swaps the pointers current_state and new_state between state_a
@@ -360,15 +340,15 @@ static unsigned long int measure_state(Register reg, gsl_rng *rng)
         }
     }
 
-    // /* 
-    //     Now, set current_state to be the collapsed state.
-    //     That is, set the state_num'th state to have a probability of 1.
+    /* 
+        Now, set current_state to be the collapsed state.
+        That is, set the state_num'th state to have a probability of 1.
 
-    //     This step could be omitted if one wanted to repeatedly measure this state,
-    //     but this is not in the spirit of true quantum mechanics hence quantum computers.
-    //  */
-    // gsl_vector_complex_set_zero(current_state);
-    // gsl_vector_complex_set(current_state, state_num, gsl_complex_rect(1.0, 0.0));
+        This step could be omitted if one wanted to repeatedly measure this state,
+        but this is not in the spirit of true quantum mechanics hence quantum computers.
+     */
+    gsl_vector_complex_set_zero(current_state);
+    gsl_vector_complex_set(current_state, state_num, gsl_complex_rect(1.0, 0.0));
 
     return state_num;
 }
@@ -767,22 +747,12 @@ static void inverse_QFT(Register *reg, gsl_spmatrix_complex *matrix)
 {
     double theta;   /* The phase to apply within the phase shift gates. */
 
-    // for (int l = reg->L_size - 1; l >= 0; l--) {
-    //     hadamard_gate(l, reg, matrix);
+    for (int l = reg->L_size + reg->M_size - 1; l >= reg->M_size; l--) {
+        hadamard_gate(l, reg, matrix);
 
-    //     for (int k = l - 1; k >= 0; k--) {
-    //         theta = M_PI / (double) INT_POW(2, reg->L_size - k - 1);
-    //         c_phase_shift_gate(l, k, theta, reg, matrix);
-    //     }
-    // }
-
-    for (int l = reg->L_size - 1; l >= 0; l--) {
-        printf("Hadamard: %d\n", l);
-
-        for (int k = l - 1; k >= 0; k--) {
-            theta = M_PI / (double) INT_POW(2, reg->L_size - k - 1);
+        for (int k = l - 1; k >= reg->M_size; k--) {
+            theta = M_PI / INT_POW(2, l - k);
             c_phase_shift_gate(l, k, theta, reg, matrix);
-            printf("PHASE: %d %d pi/%d\n", l, k, INT_POW(2, reg->L_size - k - 1));
         }
     }
 }
@@ -1022,56 +992,45 @@ static ErrorCode find_period(unsigned int *period, unsigned int C, unsigned int 
     reset_register(*reg);
     quantum_computation(C, a, reg, matrix);
 
-    check_normalisation(*reg);
+    if (very_verbose) {
+        printf("      - Measuring state...\n");
+    }
 
-    // for (int i = 0; i < 100; i++) {
-    //     measured_state_num = measure_state(*reg, rng);
-    //     omega = read_omega(measured_state_num, *reg);
-    //     printf("%.3f\n", omega);
-    // }
+    measured_state_num = measure_state(*reg, rng);
+    omega = read_omega(measured_state_num, *reg);
 
-    *period = 4;
+    if (very_verbose) {
+        printf("      - Using continued fractions to guess period...\n");
+    }
+
+    denominators = (unsigned int *) malloc(NUM_CONTINUED_FRACTIONS * sizeof(unsigned int));
+    ALLOC_CHECK(denominators);
+
+    get_continued_fractions_denominators(omega, NUM_CONTINUED_FRACTIONS, denominators);
+
+    /* With denominators found, trial multiples of them until the period is found. */
+    for (unsigned int d = 0; d < NUM_CONTINUED_FRACTIONS; d++) {    /* d => denominator. */
+        for (unsigned int m = 1; m < TRIALS_PER_DENOMINATOR + 1; m++) { /* m => multiple. */
+            *period = m * denominators[d];
+
+            if (INT_POW(a, *period) % C == 1 ) {
+                period_found = true;
+                break;
+            }
+        }
+
+        if (period_found) {
+            break;
+        }
+    }
+
+    free(denominators);
+
+    if (!period_found) {
+        return PERIOD_NOT_FOUND;
+    }
+
     return NO_ERROR;
-
-    // if (very_verbose) {
-    //     printf("      - Measuring state...\n");
-    // }
-
-    // measured_state_num = measure_state(*reg, rng);
-    // omega = read_omega(measured_state_num, *reg);
-
-    // if (very_verbose) {
-    //     printf("      - Using continued fractions to guess period...\n");
-    // }
-
-    // denominators = (unsigned int *) malloc(NUM_CONTINUED_FRACTIONS * sizeof(unsigned int));
-    // ALLOC_CHECK(denominators);
-
-    // get_continued_fractions_denominators(omega, NUM_CONTINUED_FRACTIONS, denominators);
-
-    // /* With denominators found, trial multiples of them until the period is found. */
-    // for (unsigned int d = 0; d < NUM_CONTINUED_FRACTIONS; d++) {    /* d => denominator. */
-    //     for (unsigned int m = 1; m < TRIALS_PER_DENOMINATOR + 1; m++) { /* m => multiple. */
-    //         *period = m * denominators[d];
-
-    //         if (INT_POW(a, *period) % C == 1 ) {
-    //             period_found = true;
-    //             break;
-    //         }
-    //     }
-
-    //     if (period_found) {
-    //         break;
-    //     }
-    // }
-
-    // free(denominators);
-
-    // if (!period_found) {
-    //     return PERIOD_NOT_FOUND;
-    // }
-
-    // return NO_ERROR;
 }
 
 
@@ -1286,7 +1245,7 @@ static ErrorCode parse_command_line_args(int argc, char *argv[], Register *reg, 
 {
     extern char *optarg;    /* External variable used in getopt. Stores the argument passed. */
     extern int optind;      /* External variable used in getopt. Tracks the number of arguments passed. */
-    const char *usage = "Usage: ./qc_shor.exe -C num -L L_reg_size -M M_reg_size [-i trial_int] [-v] [-V]\n";
+    const char *usage = "Usage: ./qc_shor.exe -C num -L L_reg_size -M M_reg_size [-f trial_int] [-v] [-V]\n";
     int arg;                /* The result of getopt, containing the flag of the argument passed. */
 
     /* To ensure the validty of C, the size of L and the size of M. */
@@ -1294,7 +1253,7 @@ static ErrorCode parse_command_line_args(int argc, char *argv[], Register *reg, 
     bool L_flag = false;
     bool M_flag = false;
 
-    while ((arg = getopt(argc, argv, "C:L:M:i:vV")) != -1) {
+    while ((arg = getopt(argc, argv, "C:L:M:f:vV")) != -1) {
         switch(arg) {
             case 'C':
                 *C = atoi(optarg);
@@ -1320,7 +1279,7 @@ static ErrorCode parse_command_line_args(int argc, char *argv[], Register *reg, 
                 very_verbose = true;
                 break;
             
-            case 'i':
+            case 'f':
                 *forced_trial_int = atoi(optarg);
                 break;
             
