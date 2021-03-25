@@ -202,16 +202,10 @@ typedef struct {
     gsl_vector_complex *state_b;
 } Register;
 
-/* 
-    A basis matrix used in the construction of larger Hadamard matrices.
-
-    Does NOT contain the necessary scale of 1/sqrt(2),
-    such that it can be stored as an integer matrix.
-    This scalar factor is implemented later in appropriate functions.
- */
-const char HADAMARD_BASE_MATRIX[2][2] = {
-    {1, 1},
-    {1, -1}
+/* Stored as doubles as to prevent frequent unneccessary casting. */
+const double HADAMARD_BASE_MATRIX[2][2] = {
+    {M_SQRT1_2, M_SQRT1_2},
+    {M_SQRT1_2, -M_SQRT1_2}
 };
 
 /*
@@ -223,11 +217,11 @@ const char HADAMARD_BASE_MATRIX[2][2] = {
     COMPLEX_ELEMENT is representing can be passed. In the case of the phase shift matrix,
     this complex element is z = r * e^(i\theta).
 */
-const char C_PHASE_SHIFT_BASE_MATRIX[4][4] = {
-    {1, 0, 0, 0},
-    {0, 1, 0, 0},
-    {0, 0, 1, 0},
-    {0, 0, 0, COMPLEX_ELEMENT}
+const double C_PHASE_SHIFT_BASE_MATRIX[4][4] = {
+    {1.0, 0.0, 0.0, 0.0},
+    {0.0, 1.0, 0.0, 0.0},
+    {0.0, 0.0, 1.0, 0.0},
+    {0.0, 0.0, 0.0, COMPLEX_ELEMENT}
 };
 
 /* Used for the controlled display of progress messages throughout the program. */
@@ -256,7 +250,7 @@ static void display_state(Register reg)
             }
             printf("> ");
 
-            printf("%.2f", prob);
+            printf("%.2f, ", prob);
 
             x += GET_BIT(i, 6) << 2;
             x += GET_BIT(i, 5) << 1;
@@ -267,9 +261,22 @@ static void display_state(Register reg)
             fx += GET_BIT(i, 2) << 2;
             fx += GET_BIT(i, 3) << 3;
 
-            printf("x = %d, f(x) = %d, Correct f(x) = %d\n", x, fx, INT_POW(7, x) % 15);
+            printf("num = %d, x = %d, f(x) = %d, Correct f(x) = %d\n", i, x, fx, INT_POW(7, x) % 15);
         }
     }
+}
+
+static void check_normalisation(Register reg)
+{
+    double sum_of_sq = 0.0;
+    display_state(reg);
+
+    for (unsigned int i = 0; i < reg.num_states; i++) {
+        sum_of_sq += gsl_complex_abs2(gsl_vector_complex_get(*reg.current_state, i));
+    }
+
+    printf("NORM: %.5f\n", sum_of_sq);
+
 }
 
 // /****************************************************************************************
@@ -353,15 +360,15 @@ static unsigned long int measure_state(Register reg, gsl_rng *rng)
         }
     }
 
-    /* 
-        Now, set current_state to be the collapsed state.
-        That is, set the state_num'th state to have a probability of 1.
+    // /* 
+    //     Now, set current_state to be the collapsed state.
+    //     That is, set the state_num'th state to have a probability of 1.
 
-        This step could be omitted if one wanted to repeatedly measure this state,
-        but this is not in the spirit of true quantum mechanics hence quantum computers.
-     */
-    gsl_vector_complex_set_zero(current_state);
-    gsl_vector_complex_set(current_state, state_num, gsl_complex_rect(1.0, 0.0));
+    //     This step could be omitted if one wanted to repeatedly measure this state,
+    //     but this is not in the spirit of true quantum mechanics hence quantum computers.
+    //  */
+    // gsl_vector_complex_set_zero(current_state);
+    // gsl_vector_complex_set(current_state, state_num, gsl_complex_rect(1.0, 0.0));
 
     return state_num;
 }
@@ -760,12 +767,22 @@ static void inverse_QFT(Register *reg, gsl_spmatrix_complex *matrix)
 {
     double theta;   /* The phase to apply within the phase shift gates. */
 
+    // for (int l = reg->L_size - 1; l >= 0; l--) {
+    //     hadamard_gate(l, reg, matrix);
+
+    //     for (int k = l - 1; k >= 0; k--) {
+    //         theta = M_PI / (double) INT_POW(2, reg->L_size - k - 1);
+    //         c_phase_shift_gate(l, k, theta, reg, matrix);
+    //     }
+    // }
+
     for (int l = reg->L_size - 1; l >= 0; l--) {
-        hadamard_gate(l, reg, matrix);
+        printf("Hadamard: %d\n", l);
 
         for (int k = l - 1; k >= 0; k--) {
             theta = M_PI / (double) INT_POW(2, reg->L_size - k - 1);
             c_phase_shift_gate(l, k, theta, reg, matrix);
+            printf("PHASE: %d %d pi/%d\n", l, k, INT_POW(2, reg->L_size - k - 1));
         }
     }
 }
@@ -812,12 +829,10 @@ static void quantum_computation(unsigned int C, unsigned int a, Register *reg, g
         x *= 2;
     }
 
-    display_state(*reg);
-
-    // if (very_verbose) {
-    //     printf("         - Performing inverse quantum Fourier transform.\n");
-    // }
-    // inverse_QFT(reg, matrix);
+    if (very_verbose) {
+        printf("         - Performing inverse quantum Fourier transform.\n");
+    }
+    inverse_QFT(reg, matrix);
 }
 
 
@@ -954,6 +969,7 @@ static double read_omega(unsigned long int state_num, Register reg)
     unsigned int x_tilde; /* Quantity to build the result of the x_tilde register in. */
     unsigned int power;
 
+    x_tilde = 0;
     power = 0;
 
     /* Read x_tilde register in reverse order. */
@@ -1005,6 +1021,14 @@ static ErrorCode find_period(unsigned int *period, unsigned int C, unsigned int 
     }
     reset_register(*reg);
     quantum_computation(C, a, reg, matrix);
+
+    check_normalisation(*reg);
+
+    // for (int i = 0; i < 100; i++) {
+    //     measured_state_num = measure_state(*reg, rng);
+    //     omega = read_omega(measured_state_num, *reg);
+    //     printf("%.3f\n", omega);
+    // }
 
     *period = 4;
     return NO_ERROR;
