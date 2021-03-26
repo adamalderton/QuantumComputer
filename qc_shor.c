@@ -202,7 +202,11 @@ typedef struct {
     gsl_vector_complex *state_b;
 } Register;
 
-/* Stored as doubles as to prevent frequent unneccessary casting. */
+/*
+    A basis matrix used in the contruction of conditional phase-shift gate matrices.
+
+    Stored as doubles to prevent unnecessary casting.
+*/
 const double HADAMARD_BASE_MATRIX[2][2] = {
     {M_SQRT1_2, M_SQRT1_2},
     {M_SQRT1_2, -M_SQRT1_2}
