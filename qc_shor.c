@@ -39,7 +39,7 @@
                 The size of the M sub-register of the qubit register.
         
         Options:
-            -f [positive integer]
+            -a [positive integer]
                 Force Shor's algorithm to use this integer only as the trial integer.
             
             -v
@@ -921,7 +921,6 @@ static ErrorCode find_period(unsigned int *period, unsigned int C, unsigned int 
     if (very_verbose) {
         printf("      - Measuring state...\n");
     }
-
     measured_state_num = measure_state(*reg, rng);
     omega = read_omega(measured_state_num, *reg);
 
@@ -1033,7 +1032,7 @@ static ErrorCode shors_algorithm(unsigned int factors[2], unsigned int C, unsign
 
         } else if (INT_POW(forced_trial_int, period / 2) % C == C - 1) {
             if (verbose) {
-                printf(" --- Period was found to be %d, but it did not pass the validity requirements\n", period);
+                printf(" --- Period was found to be %d, but it did not pass the validity requirements.\n", period);
             }
             printf(" --- A valid period was not found and hence C = %d could not be factorised.\n", C);
             return PERIOD_NOT_FOUND;
@@ -1179,7 +1178,7 @@ static ErrorCode parse_command_line_args(int argc, char *argv[], Register *reg, 
     bool L_flag = false;
     bool M_flag = false;
 
-    while ((arg = getopt(argc, argv, "C:L:M:f:vV")) != -1) {
+    while ((arg = getopt(argc, argv, "C:L:M:a:vV")) != -1) {
         switch(arg) {
             case 'C':
                 *C = atoi(optarg);
@@ -1205,7 +1204,7 @@ static ErrorCode parse_command_line_args(int argc, char *argv[], Register *reg, 
                 very_verbose = true;
                 break;
             
-            case 'f':
+            case 'a':
                 *forced_trial_int = atoi(optarg);
                 break;
             
